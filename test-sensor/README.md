@@ -107,3 +107,42 @@ pio run -d test-sensor -e uno_all -t upload -t monitor
 ```
 
 > **หมายเหตุ:** Serial Monitor ใช้ Baud Rate `115200` สำหรับทุกบอร์ด
+
+---
+
+## 💻 การใช้งานผ่าน Arduino IDE
+
+หากไม่ต้องการใช้ PlatformIO ได้จัดเตรียมโฟลเดอร์สำหรับ Arduino IDE ไว้ให้แล้วที่: [`test-sensor/arduino/`](arduino/)
+
+### โครงสร้างไฟล์ Sketch:
+- `arduino/01_i2c_scanner/01_i2c_scanner.ino` (สแกนหา I2C address)
+- `arduino/02_semg_adc_test/02_semg_adc_test.ino` (ทดสอบเซนเซอร์กล้ามเนื้อ)
+- `arduino/03_fsr_test/03_fsr_test.ino` (ทดสอบเซนเซอร์แรงกด FSR)
+- `arduino/04_mpu6050_test/04_mpu6050_test.ino` (ทดสอบ Gyro/Accelerometer)
+- `arduino/05_max30102_test/05_max30102_test.ino` (ทดสอบวัดชีพจร)
+- `arduino/06_mlx90614_test/06_mlx90614_test.ino` (ทดสอบวัดอุณหภูมิอินฟราเรด)
+- `arduino/07_all_diagnostics/07_all_diagnostics.ino` (ทดสอบอ่านค่ารวมทุกตัว)
+
+### ขั้นตอนการตั้งค่าใน Arduino IDE:
+1. **เพิ่ม Board URL สำหรับ ESP8266 / ESP32:**
+   - ไปที่ `File` -> `Preferences`
+   - ในช่อง **Additional boards manager URLs** วางลิงก์:
+     ```text
+     http://arduino.esp8266.com/stable/package_esp8266com_index.json
+     https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+     ```
+2. **ติดตั้ง Board Core:**
+   - ไปที่ `Tools` -> `Board` -> `Boards Manager...`
+   - ค้นหา **esp8266** แล้วกด **Install** (หากใช้ ESP32 ให้ค้นหา **esp32** แล้วกด Install)
+3. **ติดตั้ง Libraries ที่จำเป็น:**
+   - ไปที่ `Sketch` -> `Include Library` -> `Manage Libraries...`
+   - ค้นหาและติดตั้ง 4 ตัวนี้:
+     - `Adafruit MPU6050` (กด Install All เพื่อลง Dependencies ร่วม)
+     - `SparkFun MAX3010x Pulse and Proximity Sensor Library`
+     - `Adafruit MLX90614 Library`
+     - `Adafruit Unified Sensor`
+4. **เปิด Sketch และ Upload:**
+   - ไปที่ `File` -> `Open...` แล้วเลือกไฟล์ `.ino` จากโฟลเดอร์ `test-sensor/arduino/<ชื่อโฟลเดอร์>/`
+   - เลือก Board: `NodeMCU 1.0 (ESP-12E Module)` หรือบอร์ดที่คุณใช้งาน
+   - เลือก Port: เช่น `/dev/ttyUSB0`
+   - กดปุ่ม **Upload** ➡️
