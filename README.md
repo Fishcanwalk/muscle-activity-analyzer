@@ -9,3 +9,7 @@
 ## 📖 เอกสารข้อกำหนดระบบ (Specification)
 ดูรายละเอียดทั้งหมดของสถาปัตยกรรม, ผังวงจรฮาร์ดแวร์, โครงสร้างโฟลเดอร์, API Spec และ Schema ได้ที่:
 👉 **[SYSTEM_SPEC.md](SYSTEM_SPEC.md)**
+
+## 📦 การติดตั้ง Dependencies และสภาพแวดล้อม (Setup Guide)
+คู่มือการติดตั้งโปรแกรม, Extension, การตั้งค่าพอร์ต USB บน Ubuntu และไลบรารีทั้งหมด:
+👉 **[DEPENDENCIES.md](DEPENDENCIES.md)**
