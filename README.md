@@ -30,7 +30,7 @@ docker exec muscle_analyzer_backend python -m app.seed.seed_mock_data
 cd frontend
 npm install
 npm run dev
-# เปิด http://localhost:5173
+# เปิด http://localhost:5050
 ```
 
 ฟีเจอร์ปัจจุบัน:

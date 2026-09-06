@@ -9,4 +9,4 @@ class Config:
     MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "muscle_activity_analyzer")
     FLASK_PORT = int(os.getenv("FLASK_PORT", 5001))
     FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5050").split(",")
