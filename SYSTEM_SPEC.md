@@ -113,6 +113,18 @@ muscle-activity-analyzer/
 ├── SYSTEM_SPEC.md                  # เอกสารข้อกำหนดสถาปัตยกรรมฉบับนี้
 ├── docker-compose.yml              # สำหรับรัน MongoDB + Backend ในตัว
 │
+├── test-sensor/                    # ชุดทดสอบฮาร์ดแวร์และวินิจฉัยเซนเซอร์ (PlatformIO)
+│   ├── platformio.ini              # ตั้งค่า envs แยก flash แต่ละสคริปต์ทดสอบ
+│   ├── README.md                   # คู่มือ pinout และวิธีรันการทดสอบ
+│   └── src/
+│       ├── 01_i2c_scanner.cpp       # สแกนตรวจหา Address (0x68, 0x57, 0x5A)
+│       ├── 02_semg_adc_test.cpp     # ทดสอบอ่าน ADC sEMG (GPIO 34)
+│       ├── 03_fsr_test.cpp          # ทดสอบอ่าน ADC FSR (GPIO 35)
+│       ├── 04_mpu6050_test.cpp      # ทดสอบตรวจจับองศาและการเคลื่อนไหว
+│       ├── 05_max30102_test.cpp     # ทดสอบวัดชีพจรและค่า IR LED
+│       ├── 06_mlx90614_test.cpp     # ทดสอบวัดอุณหภูมิอินฟราเรด
+│       └── 07_all_diagnostics.cpp   # สคริปต์รันเซนเซอร์ 5 ตัวพร้อมกันแบบ Real-time
+│
 ├── iot/                            # ซอร์สโค้ด ESP32 (PlatformIO)
 │   ├── platformio.ini              # การตั้งค่าบอร์ด, Libraries และ Build Flags
 │   ├── include/
@@ -387,15 +399,50 @@ muscle-activity-analyzer/
 
 ---
 
-## 8. 🚀 คำแนะนำในการเริ่มพัฒนา (Implementation Roadmap)
+## 8. 🧪 ชุดทดสอบฮาร์ดแวร์และการวินิจฉัย (Sensor Testing & Diagnostic Suite)
 
-1. **Step 1 - Backend & Database:**
+เพื่อความมั่นใจในความถูกต้องของฮาร์ดแวร์ก่อนเริ่มส่งข้อมูลขึ้นระบบคลาวด์/เซิร์ฟเวอร์ โปรเจกต์ได้จัดเตรียมชุดทดสอบในโฟลเดอร์ `test-sensor/` ที่รองรับทั้ง **ESP32**, **ESP8266**, และ **Arduino Uno (ATmega328P)** โดยมีระบบ Auto-Detection ใน `board_config.h` ปรับพินและระดับแรงดันให้อัตโนมัติ:
+
+### 8.1 ตารางพินเชื่อมต่อเปรียบเทียบตามบอร์ด
+| สัญญาณ / เซนเซอร์ | ESP32 DevKit (3.3V) | ESP8266 (3.3V) | Arduino Uno (5.0V) |
+| :--- | :--- | :--- | :--- |
+| **I2C SDA / SCL** | GPIO 21 / GPIO 22 | GPIO 4 (D2) / GPIO 5 (D1) | A4 / A5 |
+| **sEMG (ADC)** | GPIO 34 (ADC1) | A0 (TOUT) | A0 |
+| **FSR (ADC)** | GPIO 35 (ADC1) | A0 (สลับสายทดสอบ) | A1 |
+| **ADC Resolution** | 12-bit (0-4095) | 10-bit (0-1023) | 10-bit (0-1023) |
+
+> ⚠️ **หมายเหตุ:** สำหรับ Arduino Uno ที่ใช้ Logic 5V หากต่อเซนเซอร์ I2C (MPU6050, MAX30102, MLX90614) แนะนำให้ต่อไฟเลี้ยง 3.3V และตรวจสอบว่าโมดูลมี Logic Level Shifter รองรับสาย 5V หรือใช้โมดูล Level Shifter คั่น
+
+### 8.2 ตัวอย่างคำสั่งรันตามบอร์ดที่ต้องการทดสอบ
+```bash
+# === ESP32 (บอร์ดหลัก) ===
+pio run -d test-sensor -e esp32_i2c_scanner -t upload -t monitor
+pio run -d test-sensor -e esp32_all -t upload -t monitor
+
+# === ESP8266 (NodeMCU / D1 Mini) ===
+pio run -d test-sensor -e esp8266_i2c_scanner -t upload -t monitor
+pio run -d test-sensor -e esp8266_all -t upload -t monitor
+
+# === Arduino Uno / Nano (ATmega328P) ===
+pio run -d test-sensor -e uno_i2c_scanner -t upload -t monitor
+pio run -d test-sensor -e uno_all -t upload -t monitor
+```
+
+---
+
+## 9. 🚀 คำแนะนำในการเริ่มพัฒนา (Implementation Roadmap)
+
+1. **Step 1 - Hardware Verification (`test-sensor/`):**
+   - ต่อวงจรบน Breadboard ตามพินที่กำหนด
+   - รัน `i2c_scanner` ตรวจสอบ Address ของ MPU-6050, MAX30102, MLX90614
+   - รัน `all_diagnostics` เพื่อตรวจสอบการทำงานพร้อมกันของเซนเซอร์ทุกตัว
+2. **Step 2 - Backend & Database:**
    - รัน MongoDB ผ่าน `docker-compose up -d`
-   - สร้าง Flask Project ตามโครงสร้าง พร้อมทดสอบ Route Ingestion และ Live Polling ด้วย Mock Data
-2. **Step 2 - Frontend Dashboard:**
-   - สร้างโปรเจกต์ Svelte ด้วย Vite
-   - เชื่อมต่อ `telemetryStore` ทดสอบรับ Mock Data และพล็อตกราฟ Real-time
-3. **Step 3 - IoT Sensor Calibration:**
-   - ต่อวงจร ESP32 และรัน I2C Scanner ตรวจสอบ Address (`0x68`, `0x57`, `0x5A`)
-   - ปรับแต่งการอ่านค่า ADC ของ sEMG และ FSR
-   - เขียนฟังก์ชันคำนวณ RMS/MAV และทดสอบส่ง HTTP POST เข้า Flask API
+   - พัฒนา Flask REST API ตามสเปก พร้อมทดสอบ Ingest และ Live Polling Cache
+3. **Step 3 - Frontend Dashboard:**
+   - พัฒนา Svelte SPA พร้อม Reactive Polling Store เชื่อมกับ Backend
+   - แสดงผลกราฟสด sEMG, FSR, IMU และ Vital signs
+4. **Step 4 - Full Integration (IoT -> API -> DB -> Frontend):**
+   - นำโค้ดเซนเซอร์ไปผสานเข้ากับ FreeRTOS Dual-Task สถาปัตยกรรมหลักใน `iot/`
+   - ทดสอบสตรีมข้อมูลครบวงจร
+
