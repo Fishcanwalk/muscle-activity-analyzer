@@ -14,6 +14,7 @@
   #define I2C_SCL_PIN       22
   #define EMG_PIN           34    // ADC1 CH6
   #define FSR_PIN           35    // ADC1 CH7
+  #define FSR_DIGITAL_PIN   27    // D0 (digital threshold output)
   #define ADC_MAX_VAL       4095  // 12-bit ADC
   #define SYSTEM_VCC        3.3f
   #define HAS_DUAL_ADC      1
@@ -30,6 +31,7 @@
   #define I2C_SCL_PIN       5     // D1
   #define EMG_PIN           A0    // ESP8266 มี ADC Pin เดียว (A0)
   #define FSR_PIN           A0    // สลับเสียบสาย A0 เมื่อต้องการทดสอบ FSR
+  #define FSR_DIGITAL_PIN   D5    // D0 (digital threshold output)
   #define ADC_MAX_VAL       1023  // 10-bit ADC
   #define SYSTEM_VCC        3.3f
   #define HAS_DUAL_ADC      0
@@ -45,6 +47,7 @@
   #define I2C_SCL_PIN       A5    // Fixed Hardware I2C SCL
   #define EMG_PIN           A0
   #define FSR_PIN           A1
+  #define FSR_DIGITAL_PIN   7     // D0 (digital threshold output)
   #define ADC_MAX_VAL       1023  // 10-bit ADC
   #define SYSTEM_VCC        5.0f
   #define HAS_DUAL_ADC      1
