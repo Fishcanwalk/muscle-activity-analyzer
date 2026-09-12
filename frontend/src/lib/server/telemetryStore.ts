@@ -96,7 +96,10 @@ class ServerTelemetryState {
 		mpu: {
 			pitch: 0.0,
 			roll: 0.0,
-			velocity: 0.0
+			velocity: 0.0,
+			ax: 0.0,
+			ay: 0.0,
+			az: 0.0
 		},
 		vitals: {
 			hr: 72,
@@ -227,7 +230,10 @@ class ServerTelemetryState {
 				pitch: data.mpu.pitch !== undefined ? round3(data.mpu.pitch) : this.state.mpu.pitch,
 				roll: data.mpu.roll !== undefined ? round3(data.mpu.roll) : this.state.mpu.roll,
 				velocity:
-					data.mpu.velocity !== undefined ? round3(data.mpu.velocity) : this.state.mpu.velocity
+					data.mpu.velocity !== undefined ? round3(data.mpu.velocity) : this.state.mpu.velocity,
+				ax: data.mpu.ax !== undefined ? round3(data.mpu.ax) : this.state.mpu.ax,
+				ay: data.mpu.ay !== undefined ? round3(data.mpu.ay) : this.state.mpu.ay,
+				az: data.mpu.az !== undefined ? round3(data.mpu.az) : this.state.mpu.az
 			};
 		}
 

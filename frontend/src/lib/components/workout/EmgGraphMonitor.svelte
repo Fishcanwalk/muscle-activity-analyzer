@@ -162,7 +162,7 @@
 	}
 
 	function copyCurlCode() {
-		const code = `curl -X POST http://localhost:5174/api/emg \\
+		const code = `curl -X POST http://localhost:5173/api/emg \\
   -H "Content-Type: application/json" \\
   -d '{"raw": 2200, "rms": 285.5, "mvcPercent": 52, "board": "esp32"}'`;
 		navigator.clipboard.writeText(code);
