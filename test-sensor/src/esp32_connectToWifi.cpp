@@ -1,34 +1,24 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include "esp_wpa2.h"
 #include <HTTPClient.h>
 
 // ----------------------------------------------------
-// ข้อมูลสำหรับล็อกอิน COEwifi (WPA2-Enterprise PEAP)
+// ข้อมูลสำหรับล็อกอิน CoEIoT (WPA2-Personal)
 // ----------------------------------------------------
-#define EAP_IDENTITY  "6710110151"      // Username หรือ รหัสนักศึกษา
-#define EAP_USERNAME  "6710110151"      // Username หรือ รหัสนักศึกษา
-#define EAP_PASSWORD  "Mh@P0ng_62"   // รหัสผ่าน PSU Passport
-const char* ssid    = "COEwifi";
+const char* ssid     = "CoEIoT";
+const char* password = "iot.coe.psu.ac.th";
 
 // IP คอมพิวเตอร์ของคุณ (ดูจากคำสั่ง hostname -I บนคอม)
-const char* serverUrl = "http://172.30.80.14:5173/api/telemetry"; 
+const char* serverUrl = "http://172.30.95.53:5173/api/telemetry";
 
-void connectEnterpriseWiFi() {
-  Serial.println("\n[WiFi] Setting up WPA2-Enterprise for COEwifi...");
-  
+void connectWiFi() {
+  Serial.println("\n[WiFi] Setting up connection for CoEIoT...");
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
-  // กำหนดค่า WPA2-Enterprise (EAP-PEAP / MSCHAPv2)
-  esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
-  esp_wifi_sta_wpa2_ent_set_username((uint8_t *)EAP_USERNAME, strlen(EAP_USERNAME));
-  esp_wifi_sta_wpa2_ent_set_password((uint8_t *)EAP_PASSWORD, strlen(EAP_PASSWORD));
-  esp_wifi_sta_wpa2_ent_enable();
-
-  WiFi.begin(ssid);
-
-  Serial.print("[WiFi] Connecting to COEwifi");
+  Serial.print("[WiFi] Connecting to CoEIoT");
   int retry = 0;
   while (WiFi.status() != WL_CONNECTED && retry < 40) {
     delay(500);
@@ -37,17 +27,17 @@ void connectEnterpriseWiFi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WiFi] ✅ Connected to COEwifi successfully!");
+    Serial.println("\n[WiFi] ✅ Connected to CoEIoT successfully!");
     Serial.print("[WiFi] ESP32 IP Address: ");
     Serial.println(WiFi.localIP());
   } else {
-    Serial.println("\n[WiFi] ❌ Failed to connect to COEwifi. Please verify credentials.");
+    Serial.println("\n[WiFi] ❌ Failed to connect to CoEIoT. Please verify credentials.");
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  connectEnterpriseWiFi();
+  connectWiFi();
 }
 
 void loop() {

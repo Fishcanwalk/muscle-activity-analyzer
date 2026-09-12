@@ -1,0 +1,10 @@
+# PlatformIO build artifacts
+test-sensor/.pio/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
