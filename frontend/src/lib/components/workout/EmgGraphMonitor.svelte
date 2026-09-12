@@ -72,7 +72,7 @@
 		ctx.fillStyle = '#09090b';
 		ctx.fillRect(0, 0, width, height);
 
-		// Grid lines & scales
+		// Grid lines & scales — telemetry.emg values are µV per docs/sensor_usage.md
 		const maxDisplayUv = 600 / gain;
 		const gridSteps = 4;
 		ctx.lineWidth = 1;
@@ -105,7 +105,7 @@
 			ctx.stroke();
 		}
 
-		// Reference Lines: High Tension (280 µV) & MVC (500 µV)
+		// Reference Lines: High Tension (280 µV per docs/sensor_usage.md) & MVC (500 µV)
 		const tensionY = centerY - (280 / maxDisplayUv) * (height / 2);
 		ctx.setLineDash([4, 4]);
 		ctx.strokeStyle = 'rgba(16, 185, 129, 0.4)';
@@ -164,7 +164,7 @@
 	function copyCurlCode() {
 		const code = `curl -X POST http://localhost:5174/api/emg \\
   -H "Content-Type: application/json" \\
-  -d '{"raw": 320, "rms": 285.5, "mvcPercent": 52, "board": "esp32"}'`;
+  -d '{"raw": 2200, "rms": 285.5, "mvcPercent": 52, "board": "esp32"}'`;
 		navigator.clipboard.writeText(code);
 		copiedCurl = true;
 		setTimeout(() => (copiedCurl = false), 2000);
@@ -361,10 +361,12 @@
 				<br />
 				Content-Type: application/json
 				<br />
-				{JSON.stringify({ raw: 320, rms: 285.5, mvcPercent: 52, board: 'esp32' }, null, 2)}
+				{JSON.stringify({ raw: 2200, rms: 285.5, mvcPercent: 52, board: 'esp32' }, null, 2)}
 			</div>
 
 			<div class="text-[11px] text-zinc-400">
+				<strong>raw</strong> is the sensor's native ADC count (0-4095); the server converts it to µV. <strong>rms</strong>/<strong>mvcPercent</strong>, if provided, are used as-is (already µV / %MVC).
+				<br />
 				<strong>All-in-one Multi-Sensor:</strong> <code>POST /api/telemetry</code> (accepts EMG, FSR grip, MPU6050, MAX30102).
 				<br />
 				<strong>Live SSE Stream:</strong> <code>GET /api/telemetry/stream</code> (subscribes to 50Hz continuous push).
