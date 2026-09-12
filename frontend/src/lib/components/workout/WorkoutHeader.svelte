@@ -11,7 +11,6 @@
 		Heartbeat,
 		Layout,
 		SignOut,
-		Flask,
 		Plug
 	} from 'phosphor-svelte';
 
@@ -21,14 +20,6 @@
 	}
 
 	let { activeTab, onTabChange }: Props = $props();
-
-	function toggleSimulation() {
-		if (telemetry.isSimulating) {
-			telemetry.stopSimulation();
-		} else {
-			telemetry.startSimulation();
-		}
-	}
 </script>
 
 <header class="sticky top-0 z-50 border-b border-zinc-800 bg-zinc-950/90 px-4 pt-2.5 pb-0 backdrop-blur-md">
@@ -76,21 +67,15 @@
 				<span>CV {telemetry.cv.fps} FPS</span>
 			</div>
 
-			<!-- Live / Sim Toggle -->
-			<button
-				onclick={toggleSimulation}
-				class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-sans transition {telemetry.isSimulating
-					? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-					: 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'}"
+			<!-- Hardware Connection Status Indicator -->
+			<div
+				class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-sans {telemetry.isWsConnected
+					? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+					: 'border-zinc-800 bg-zinc-900 text-zinc-500'}"
 			>
-				{#if telemetry.isSimulating}
-					<Flask size={13} weight="fill" />
-					<span>Sim: 50Hz</span>
-				{:else}
-					<Plug size={13} />
-					<span>Hardware</span>
-				{/if}
-			</button>
+				<Plug size={13} weight={telemetry.isWsConnected ? 'fill' : 'regular'} />
+				<span>{telemetry.isWsConnected ? `Hardware Live (${telemetry.streamHz}Hz)` : 'Hardware Offline'}</span>
+			</div>
 
 			<!-- Logout -->
 			<form action="/logout" method="POST" class="inline">

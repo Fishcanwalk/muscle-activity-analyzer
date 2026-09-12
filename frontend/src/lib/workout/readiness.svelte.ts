@@ -1,3 +1,5 @@
+import { telemetry } from './telemetry.svelte';
+
 class ReadinessManager {
 	isTesting = $state(false);
 	countdownSeconds = $state(5);
@@ -6,9 +8,9 @@ class ReadinessManager {
 	baselineGripKg = $state(50.0);
 	cnsReadinessPercent = $state(96);
 
-	restingHr = $state(62);
-	restingSpo2 = $state(99);
-	baselineSkinTemp = $state(33.4);
+	restingHr = $derived(telemetry.vitals.heartRate > 0 ? telemetry.vitals.heartRate : 62);
+	restingSpo2 = $derived(telemetry.vitals.spO2 > 0 ? telemetry.vitals.spO2 : 99);
+	baselineSkinTemp = $derived(telemetry.vitals.skinTemp > 0 ? telemetry.vitals.skinTemp : 33.4);
 
 	overallScore = $state(95);
 	statusLabel = $state('Optimal Readiness');
@@ -31,11 +33,13 @@ class ReadinessManager {
 
 		this.testInterval = setInterval(() => {
 			secondsLeft -= 1;
-			const simulatedEffort = Number((42 + Math.random() * 7.5).toFixed(1));
-			if (simulatedEffort > highestGrip) highestGrip = simulatedEffort;
+			// Sample real hardware FSR reading (1 kg ≈ 9.8 N)
+			const realGripForce = telemetry.fsr.gripForce;
+			const measuredKg = Number((realGripForce > 0 ? realGripForce / 9.8 : 0).toFixed(1));
+			if (measuredKg > highestGrip) highestGrip = measuredKg;
 
 			this.countdownSeconds = secondsLeft;
-			this.currentGripKg = simulatedEffort;
+			this.currentGripKg = measuredKg;
 			this.peakGripKg = highestGrip;
 
 			if (secondsLeft <= 0) {

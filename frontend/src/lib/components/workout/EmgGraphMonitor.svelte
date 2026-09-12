@@ -201,9 +201,9 @@
 			<div>
 				<div class="flex items-center gap-2">
 					<h3 class="text-sm font-bold text-zinc-100 uppercase tracking-wide">sEMG Real-Time Waveform</h3>
-					<span class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono {telemetry.isWsConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'}">
-						<span class="w-1.5 h-1.5 rounded-full {telemetry.isWsConnected ? 'bg-emerald-500' : 'bg-cyan-400'}"></span>
-						{telemetry.isWsConnected ? 'HARDWARE LIVE' : 'SIMULATION 50Hz'}
+					<span class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono {telemetry.isWsConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'}">
+						<span class="w-1.5 h-1.5 rounded-full {telemetry.isWsConnected ? 'bg-emerald-500' : 'bg-zinc-500'}"></span>
+						{telemetry.isWsConnected ? 'HARDWARE LIVE' : 'HARDWARE OFFLINE'}
 					</span>
 				</div>
 				<p class="text-[11px] text-zinc-400 font-mono">

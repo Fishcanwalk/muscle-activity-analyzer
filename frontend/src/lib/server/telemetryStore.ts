@@ -101,31 +101,28 @@ class ServerTelemetryState {
 		const now = Date.now();
 		this.recordPacket(data.board || 'unknown');
 
-		const rawVal = Array.isArray(data.raw) ? (data.raw[data.raw.length - 1] ?? 20) : (data.raw ?? 20);
+		const rawVal = Array.isArray(data.raw)
+			? (data.raw[data.raw.length - 1] ?? 20)
+			: (data.raw ?? 20);
 		if (Array.isArray(data.raw)) {
 			for (const r of data.raw) {
 				this.rawBuffer.shift();
-				this.rawBuffer.push(r);
 				this.rawBuffer.push(round3(r));
 			}
 		} else {
 			this.rawBuffer.shift();
-			this.rawBuffer.push(rawVal);
 			this.rawBuffer.push(round3(rawVal));
 		}
 
-		const rms = data.rms !== undefined ? data.rms : Math.round(Math.abs(rawVal) * 1.1);
-		const peak = data.peak !== undefined ? data.peak : Math.max(rawVal, this.state.emg.peak);
 		const rms = data.rms !== undefined ? round3(data.rms) : round3(Math.abs(rawVal) * 1.1);
-		const peak = data.peak !== undefined ? round3(data.peak) : Math.max(round3(rawVal), this.state.emg.peak);
-		const mvcPercent = data.mvcPercent !== undefined 
-			? data.mvcPercent 
-			: Math.min(100, Math.round((rms / this.state.calibration.emgMvc) * 100));
-			? round3(data.mvcPercent) 
-			: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
+		const peak =
+			data.peak !== undefined ? round3(data.peak) : Math.max(round3(rawVal), this.state.emg.peak);
+		const mvcPercent =
+			data.mvcPercent !== undefined
+				? round3(data.mvcPercent)
+				: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
 
 		this.state.emg = {
-			raw: rawVal,
 			raw: round3(rawVal),
 			rawBuffer: [...this.rawBuffer],
 			rms,
@@ -144,37 +141,35 @@ class ServerTelemetryState {
 		this.recordPacket(data.board || 'esp32');
 
 		if (data.emg) {
-			const rawVal = Array.isArray(data.emg.raw) 
-				? (data.emg.raw[data.emg.raw.length - 1] ?? 20) 
+			const rawVal = Array.isArray(data.emg.raw)
+				? (data.emg.raw[data.emg.raw.length - 1] ?? 20)
 				: (data.emg.raw ?? 20);
 
 			if (Array.isArray(data.emg.raw)) {
 				for (const r of data.emg.raw) {
 					this.rawBuffer.shift();
-					this.rawBuffer.push(r);
 					this.rawBuffer.push(round3(r));
 				}
 			} else {
 				this.rawBuffer.shift();
-				this.rawBuffer.push(rawVal);
 				this.rawBuffer.push(round3(rawVal));
 			}
 
-			const rms = data.emg.rms !== undefined ? data.emg.rms : Math.round(Math.abs(rawVal) * 1.1);
-			const rms = data.emg.rms !== undefined ? round3(data.emg.rms) : round3(Math.abs(rawVal) * 1.1);
-			const mvcPercent = data.emg.mvcPercent !== undefined
-				? data.emg.mvcPercent
-				: Math.min(100, Math.round((rms / this.state.calibration.emgMvc) * 100));
-				? round3(data.emg.mvcPercent)
-				: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
+			const rms =
+				data.emg.rms !== undefined ? round3(data.emg.rms) : round3(Math.abs(rawVal) * 1.1);
+			const mvcPercent =
+				data.emg.mvcPercent !== undefined
+					? round3(data.emg.mvcPercent)
+					: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
 
 			this.state.emg = {
-				raw: rawVal,
 				raw: round3(rawVal),
 				rawBuffer: [...this.rawBuffer],
 				rms,
-				peak: data.emg.peak ?? Math.max(rawVal, this.state.emg.peak),
-				peak: data.emg.peak !== undefined ? round3(data.emg.peak) : Math.max(round3(rawVal), this.state.emg.peak),
+				peak:
+					data.emg.peak !== undefined
+						? round3(data.emg.peak)
+						: Math.max(round3(rawVal), this.state.emg.peak),
 				mvcPercent,
 				isHighTension: rms > 280,
 				timestamp: data.timestamp || now
@@ -183,42 +178,48 @@ class ServerTelemetryState {
 
 		if (data.fsr) {
 			this.state.fsr = {
-				gripForce: data.fsr.force ?? this.state.fsr.gripForce,
-				gripStability: data.fsr.stability ?? this.state.fsr.gripStability,
 				gripForce: data.fsr.force !== undefined ? round3(data.fsr.force) : this.state.fsr.gripForce,
-				gripStability: data.fsr.stability !== undefined ? round3(data.fsr.stability) : this.state.fsr.gripStability,
+				gripStability:
+					data.fsr.stability !== undefined
+						? round3(data.fsr.stability)
+						: this.state.fsr.gripStability,
 				isStable: (data.fsr.stability ?? 95) > 75
 			};
 		}
 
 		if (data.mpu) {
 			this.state.mpu = {
-				pitch: data.mpu.pitch ?? this.state.mpu.pitch,
-				roll: data.mpu.roll ?? this.state.mpu.roll,
-				velocity: data.mpu.velocity ?? this.state.mpu.velocity
 				pitch: data.mpu.pitch !== undefined ? round3(data.mpu.pitch) : this.state.mpu.pitch,
 				roll: data.mpu.roll !== undefined ? round3(data.mpu.roll) : this.state.mpu.roll,
-				velocity: data.mpu.velocity !== undefined ? round3(data.mpu.velocity) : this.state.mpu.velocity
+				velocity:
+					data.mpu.velocity !== undefined ? round3(data.mpu.velocity) : this.state.mpu.velocity
 			};
 		}
 
 		if (data.vitals) {
 			this.state.vitals = {
-				hr: data.vitals.hr ?? this.state.vitals.hr,
-				spo2: data.vitals.spo2 ?? this.state.vitals.spo2,
-				skinTemp: data.vitals.skinTemp ?? this.state.vitals.skinTemp,
-				deltaTemp: data.vitals.deltaTemp ?? this.state.vitals.deltaTemp
 				hr: data.vitals.hr !== undefined ? round3(data.vitals.hr) : this.state.vitals.hr,
 				spo2: data.vitals.spo2 !== undefined ? round3(data.vitals.spo2) : this.state.vitals.spo2,
-				skinTemp: data.vitals.skinTemp !== undefined ? round3(data.vitals.skinTemp) : this.state.vitals.skinTemp,
-				deltaTemp: data.vitals.deltaTemp !== undefined ? round3(data.vitals.deltaTemp) : this.state.vitals.deltaTemp
+				skinTemp:
+					data.vitals.skinTemp !== undefined
+						? round3(data.vitals.skinTemp)
+						: this.state.vitals.skinTemp,
+				deltaTemp:
+					data.vitals.deltaTemp !== undefined
+						? round3(data.vitals.deltaTemp)
+						: this.state.vitals.deltaTemp
 			};
 		}
 
 		this.broadcast('telemetry', this.state);
 	}
 
-	setCalibration(cal: { emgBaseline?: number; emgMvc?: number; fsrZero?: number; fsrMax?: number }) {
+	setCalibration(cal: {
+		emgBaseline?: number;
+		emgMvc?: number;
+		fsrZero?: number;
+		fsrMax?: number;
+	}) {
 		if (cal.emgBaseline !== undefined) this.state.calibration.emgBaseline = cal.emgBaseline;
 		if (cal.emgMvc !== undefined) this.state.calibration.emgMvc = cal.emgMvc;
 		if (cal.fsrZero !== undefined) this.state.calibration.fsrZero = cal.fsrZero;

@@ -16,7 +16,6 @@
 
 	let canvasElement: HTMLCanvasElement | null = $state(null);
 	let videoElement: HTMLVideoElement | null = $state(null);
-	let animationFrameId: number;
 
 	// Camera & MediaPipe State
 	let isWebcamActive = $state(false);
@@ -43,13 +42,6 @@
 		}
 	}
 
-	function triggerTorsoCheat() {
-		telemetry.triggerTorsoCheat();
-	}
-
-	function triggerShoulderCheat() {
-		telemetry.triggerShoulderCheat();
-	}
 
 	async function toggleWebcam() {
 		if (isWebcamActive) {
@@ -149,6 +141,7 @@
 		isWebcamActive = false;
 		telemetry.setWebcamActive(false);
 		modelStatus = 'idle';
+		drawStandbyCanvas();
 	}
 
 	function calculateElbowAngle(a: any, b: any, c: any) {
@@ -316,7 +309,7 @@
 		ctx.restore();
 	}
 
-	function drawSyntheticSkeleton() {
+	function drawStandbyCanvas() {
 		if (!canvasElement || isWebcamActive) return;
 		const ctx = canvasElement.getContext('2d');
 		if (!ctx) return;
@@ -324,6 +317,9 @@
 		const height = canvasElement.height;
 
 		ctx.clearRect(0, 0, width, height);
+
+		ctx.fillStyle = '#070a12';
+		ctx.fillRect(0, 0, width, height);
 
 		ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
 		ctx.lineWidth = 1;
@@ -339,100 +335,13 @@
 			ctx.lineTo(width, y);
 			ctx.stroke();
 		}
-
-		const { cv } = telemetry;
-		const hipX = width * 0.45;
-		const hipY = height * 0.75;
-		const torsoLeanRad = (cv.torsoAngle * Math.PI) / 180;
-		const torsoLength = height * 0.35;
-		const shoulderX = hipX - Math.sin(torsoLeanRad) * torsoLength;
-		const shoulderY = hipY - Math.cos(torsoLeanRad) * torsoLength - cv.shoulderHikeCm * 4;
-		const headX = shoulderX - Math.sin(torsoLeanRad) * 45;
-		const headY = shoulderY - 35;
-
-		const upperArmLength = height * 0.22;
-		const forearmLength = height * 0.2;
-		const elbowX = shoulderX + 25;
-		const elbowY = shoulderY + upperArmLength;
-
-		const elbowRad = (cv.elbowAngle * Math.PI) / 180;
-		const wristX = elbowX + Math.sin(Math.PI - elbowRad) * forearmLength;
-		const wristY = elbowY - Math.cos(Math.PI - elbowRad) * forearmLength;
-
-		// Torso
-		ctx.lineWidth = 6;
-		ctx.strokeStyle = cv.isTorsoCheating ? '#ef4444' : '#38bdf8';
-		ctx.beginPath();
-		ctx.moveTo(hipX, hipY);
-		ctx.lineTo(shoulderX, shoulderY);
-		ctx.stroke();
-
-		// Head
-		ctx.fillStyle = '#0b0f19';
-		ctx.strokeStyle = '#38bdf8';
-		ctx.lineWidth = 3;
-		ctx.beginPath();
-		ctx.arc(headX, headY, 20, 0, Math.PI * 2);
-		ctx.fill();
-		ctx.stroke();
-
-		// Arm
-		ctx.lineWidth = 6;
-		ctx.strokeStyle = cv.isShoulderCheating ? '#ef4444' : '#10b981';
-		ctx.beginPath();
-		ctx.moveTo(shoulderX, shoulderY);
-		ctx.lineTo(elbowX, elbowY);
-		ctx.stroke();
-
-		ctx.strokeStyle = '#10b981';
-		ctx.beginPath();
-		ctx.moveTo(elbowX, elbowY);
-		ctx.lineTo(wristX, wristY);
-		ctx.stroke();
-
-		// Joints
-		[
-			{ x: shoulderX, y: shoulderY, color: cv.isShoulderCheating ? '#ef4444' : '#38bdf8' },
-			{ x: elbowX, y: elbowY, color: '#00ff88' },
-			{ x: wristX, y: wristY, color: '#00ff88' },
-			{ x: hipX, y: hipY, color: '#38bdf8' }
-		].forEach((j) => {
-			ctx.fillStyle = j.color;
-			ctx.beginPath();
-			ctx.arc(j.x, j.y, 6, 0, Math.PI * 2);
-			ctx.fill();
-			ctx.lineWidth = 2;
-			ctx.strokeStyle = '#ffffff';
-			ctx.stroke();
-		});
-
-		// Dumbbell
-		const dbAngle = Math.PI - elbowRad;
-		ctx.save();
-		ctx.translate(wristX, wristY);
-		ctx.rotate(dbAngle);
-		ctx.fillStyle = '#9ca3af';
-		ctx.fillRect(-4, -18, 8, 36);
-		ctx.fillStyle = '#f59e0b';
-		ctx.fillRect(-10, -22, 20, 8);
-		ctx.fillRect(-10, 14, 20, 8);
-		ctx.restore();
-	}
-
-	function loop() {
-		if (!isWebcamActive) {
-			drawSyntheticSkeleton();
-		}
-		animationFrameId = requestAnimationFrame(loop);
 	}
 
 	onMount(() => {
-		animationFrameId = requestAnimationFrame(loop);
-		telemetry.startSimulation();
+		drawStandbyCanvas();
 	});
 
 	onDestroy(() => {
-		if (animationFrameId) cancelAnimationFrame(animationFrameId);
 		stopWebcam();
 	});
 </script>
@@ -503,25 +412,6 @@
 					<span>เริ่มเซต (START SET)</span>
 				{/if}
 			</button>
-
-			{#if !isWebcamActive && workout.isSetRunning}
-				<div class="flex gap-2">
-					<button
-						onclick={triggerTorsoCheat}
-						class="flex items-center gap-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-amber-400 hover:bg-amber-500/20"
-					>
-						<WarningCircle size={13} class="text-amber-400" />
-						<span>เหวี่ยงตัว</span>
-					</button>
-					<button
-						onclick={triggerShoulderCheat}
-						class="flex items-center gap-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-amber-400 hover:bg-amber-500/20"
-					>
-						<WarningCircle size={13} class="text-amber-400" />
-						<span>ยกไหล่</span>
-					</button>
-				</div>
-			{/if}
 		</div>
 	</div>
 
@@ -619,9 +509,9 @@
 					<span
 						class="h-1.5 w-1.5 rounded-full {isWebcamActive
 							? 'bg-emerald-500 shadow-[0_0_6px_#10b981]'
-							: 'bg-cyan-500 shadow-[0_0_6px_#06b6d4]'}"
+							: 'bg-zinc-500'}"
 					></span>
-					<span>{isWebcamActive ? `Live Camera (${fps} FPS)` : 'Synthetic Simulation'}</span>
+					<span>{isWebcamActive ? `Live Camera (${fps} FPS)` : 'Camera Standby'}</span>
 				</div>
 
 				<!-- Center Start Camera CTA when camera is idle -->
