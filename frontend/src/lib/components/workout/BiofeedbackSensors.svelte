@@ -2,6 +2,10 @@
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec } from '$lib/utils/format';
 	import { Gauge, Target, HandPalm, Heartbeat, ThermometerSimple, TrendDown } from 'phosphor-svelte';
+
+	function statusDotClass(status: 'live' | 'stale' | 'never') {
+		return status === 'live' ? 'bg-emerald-500' : status === 'stale' ? 'bg-amber-500' : 'bg-zinc-600';
+	}
 </script>
 
 <div class="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 font-sans text-zinc-100 antialiased">
@@ -9,6 +13,10 @@
 	<div class="col-span-1 md:col-span-2 lg:col-span-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
 		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
 			<div class="flex items-center gap-2">
+				<span
+					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.mpu)}"
+					title="MPU: {telemetry.sensorStatus.mpu}"
+				></span>
 				<span class="text-[10px] font-bold tracking-wider text-cyan-400 font-mono uppercase">
 					MPU-6050 (ESP32)
 				</span>
@@ -69,7 +77,13 @@
 	<!-- FSR Grip Force Card (1 column) -->
 	<div class="col-span-1 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
 		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<span class="text-[10px] font-mono font-bold text-cyan-400 uppercase">FSR A2 (Uno)</span>
+			<span class="flex items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-400 uppercase">
+				<span
+					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.fsr)}"
+					title="FSR: {telemetry.sensorStatus.fsr}"
+				></span>
+				FSR A2 (Uno)
+			</span>
 			<HandPalm size={14} class="text-zinc-400" />
 		</div>
 
@@ -94,7 +108,13 @@
 	<!-- MAX30102 / MLX90614 Vitals Card (1 column) -->
 	<div class="col-span-1 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
 		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<span class="text-[10px] font-mono font-bold text-cyan-400 uppercase">MAX30102 / MLX</span>
+			<span class="flex items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-400 uppercase">
+				<span
+					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.vitals)}"
+					title="Vitals: {telemetry.sensorStatus.vitals}"
+				></span>
+				MAX30102 / MLX
+			</span>
 			<Heartbeat size={14} class="text-rose-400" />
 		</div>
 

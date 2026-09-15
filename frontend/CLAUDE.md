@@ -21,6 +21,10 @@ pnpm openapi:fastapi  # regenerate src/lib/api/paths/fastapi.d.ts from backend a
 ```ini
 PUBLIC_APP_TITLE=SvelteKitten          # client-side app title ($env/dynamic/public)
 BACKEND_API_URL=http://localhost:9000  # backend base URL ($env/dynamic/private, server-only)
+TELEMETRY_SERVICE_TOKEN=changeme       # shared secret sent as X-Service-Token when forwarding
+                                        # live telemetry to POST /v1/telemetry on the backend
+                                        # ($env/dynamic/private, server-only); forwarding is
+                                        # skipped entirely if this or BACKEND_API_URL is unset
 ```
 
 ## Architecture

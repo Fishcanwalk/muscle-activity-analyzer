@@ -43,8 +43,32 @@ class TelemetryManager {
 		fps: 0
 	});
 
+	sensors = $state({
+		emg: { lastSeen: 0 },
+		fsr: { lastSeen: 0 },
+		mpu: { lastSeen: 0 },
+		vitals: { lastSeen: 0 }
+	});
+
+	private now = $state(Date.now());
+	private readonly SENSOR_STALE_MS = 2500;
+
+	sensorStatus = $derived.by(() => {
+		const statusOf = (lastSeen: number): 'live' | 'stale' | 'never' => {
+			if (!lastSeen) return 'never';
+			return this.now - lastSeen > this.SENSOR_STALE_MS ? 'stale' : 'live';
+		};
+		return {
+			emg: statusOf(this.sensors.emg.lastSeen),
+			fsr: statusOf(this.sensors.fsr.lastSeen),
+			mpu: statusOf(this.sensors.mpu.lastSeen),
+			vitals: statusOf(this.sensors.vitals.lastSeen)
+		};
+	});
+
 	isWebcamActive = $state(false);
-	isWsConnected = $state(false);
+	connectionState = $state<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting');
+	isWsConnected = $derived(this.connectionState === 'connected');
 	streamHz = $state(0);
 
 	private eventSource: EventSource | null = null;
@@ -61,6 +85,9 @@ class TelemetryManager {
 	constructor() {
 		if (typeof window !== 'undefined') {
 			this.connectApiStream();
+			setInterval(() => {
+				this.now = Date.now();
+			}, 1000);
 		}
 	}
 
@@ -80,9 +107,17 @@ class TelemetryManager {
 				try {
 					const data = JSON.parse(e.data);
 					if (data.device?.connected) {
-						this.isWsConnected = true;
+						this.connectionState = 'connected';
 						this.reconnectDelayMs = 1000;
 						this.streamHz = data.device.rateHz || 50;
+
+						if (data.sensors) {
+							if (data.sensors.emg?.lastSeen) this.sensors.emg.lastSeen = data.sensors.emg.lastSeen;
+							if (data.sensors.fsr?.lastSeen) this.sensors.fsr.lastSeen = data.sensors.fsr.lastSeen;
+							if (data.sensors.mpu?.lastSeen) this.sensors.mpu.lastSeen = data.sensors.mpu.lastSeen;
+							if (data.sensors.vitals?.lastSeen)
+								this.sensors.vitals.lastSeen = data.sensors.vitals.lastSeen;
+						}
 
 						if (data.emg) {
 							if (Array.isArray(data.emg.rawBuffer) && data.emg.rawBuffer.length > 0) {
@@ -132,12 +167,14 @@ class TelemetryManager {
 				} catch (parseErr) {}
 			});
 			this.eventSource.onerror = () => {
-				this.isWsConnected = false;
+				this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
+				this.streamHz = 0;
 				this.eventSource?.close();
 				this.scheduleReconnect();
 			};
 		} catch (err) {
 			console.warn('[Telemetry] SSE stream connect error', err);
+			this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
 			this.scheduleReconnect();
 		}
 	}

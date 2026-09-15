@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { env } from '$env/dynamic/private';
+import { logger } from '$lib/logger';
 import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
 
 export interface EmgPacket {
@@ -122,6 +124,12 @@ class ServerTelemetryState {
 			packetCount: 0,
 			rateHz: 0
 		},
+		sensors: {
+			emg: { lastSeen: 0 },
+			fsr: { lastSeen: 0 },
+			mpu: { lastSeen: 0 },
+			vitals: { lastSeen: 0 }
+		},
 		calibration: {
 			emgBaseline: 20.0,
 			emgMvc: 550.0,
@@ -173,9 +181,11 @@ class ServerTelemetryState {
 			isHighTension: rms > HIGH_TENSION_UV_THRESHOLD,
 			timestamp: data.timestamp || now
 		};
+		this.state.sensors.emg.lastSeen = now;
 
 		this.broadcast('emg', this.state.emg);
 		this.broadcast('telemetry', this.state);
+		this.forwardToBackend();
 	}
 
 	ingestFullTelemetry(data: FullTelemetryPacket) {
@@ -218,6 +228,7 @@ class ServerTelemetryState {
 				isHighTension: rms > HIGH_TENSION_UV_THRESHOLD,
 				timestamp: data.timestamp || now
 			};
+			this.state.sensors.emg.lastSeen = now;
 		}
 
 		if (data.fsr) {
@@ -239,6 +250,7 @@ class ServerTelemetryState {
 						: this.state.fsr.gripStability,
 				isStable: (data.fsr.stability ?? 95) > 75
 			};
+			this.state.sensors.fsr.lastSeen = now;
 		}
 
 		if (data.mpu) {
@@ -251,6 +263,7 @@ class ServerTelemetryState {
 				ay: data.mpu.ay !== undefined ? round3(data.mpu.ay) : this.state.mpu.ay,
 				az: data.mpu.az !== undefined ? round3(data.mpu.az) : this.state.mpu.az
 			};
+			this.state.sensors.mpu.lastSeen = now;
 		}
 
 		if (data.vitals) {
@@ -266,9 +279,11 @@ class ServerTelemetryState {
 						? round3(data.vitals.deltaTemp)
 						: this.state.vitals.deltaTemp
 			};
+			this.state.sensors.vitals.lastSeen = now;
 		}
 
 		this.broadcast('telemetry', this.state);
+		this.forwardToBackend();
 	}
 
 	setCalibration(cal: {
@@ -314,6 +329,30 @@ class ServerTelemetryState {
 
 	private broadcast(event: string, payload: any) {
 		this.emitter.emit(event, payload);
+	}
+
+	private forwardToBackend() {
+		const backendUrl = env.BACKEND_API_URL;
+		const serviceToken = env.TELEMETRY_SERVICE_TOKEN;
+		if (!backendUrl || !serviceToken) return;
+
+		fetch(`${backendUrl.replace(/\/$/, '')}/v1/telemetry`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Service-Token': serviceToken
+			},
+			body: JSON.stringify({
+				emg: this.state.emg,
+				fsr: this.state.fsr,
+				mpu: this.state.mpu,
+				vitals: this.state.vitals,
+				device: this.state.device,
+				timestamp: Date.now()
+			})
+		}).catch((err) => {
+			logger.warn({ err }, '[Telemetry] Failed to forward packet to backend');
+		});
 	}
 }
 

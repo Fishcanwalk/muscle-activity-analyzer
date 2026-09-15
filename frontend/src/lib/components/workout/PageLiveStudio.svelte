@@ -5,6 +5,7 @@
 	import { calibration } from '$lib/workout/calibration.svelte';
 	import EmgGraphMonitor from './EmgGraphMonitor.svelte';
 	import BiofeedbackSensors from './BiofeedbackSensors.svelte';
+	import RecordingControls from './RecordingControls.svelte';
 	import { formatDec } from '$lib/utils/format';
 	import { Camera, ArrowClockwise, WarningCircle, Play, Stop, X } from 'phosphor-svelte';
 
@@ -570,6 +571,8 @@
 		</div>
 	</div>
 	<BiofeedbackSensors />
+
+	<RecordingControls />
 
 	<!-- Rep Counter Banner -->
 	<div class="grid grid-cols-2 gap-4 rounded-xl border border-cyan-500/30 bg-card p-4 text-center md:grid-cols-5">

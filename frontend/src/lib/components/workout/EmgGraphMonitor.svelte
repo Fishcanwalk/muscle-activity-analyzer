@@ -164,6 +164,10 @@
 		peakUv = telemetry.emg.rms;
 	}
 
+	function statusDotClass(status: 'live' | 'stale' | 'never') {
+		return status === 'live' ? 'bg-emerald-500' : status === 'stale' ? 'bg-amber-500' : 'bg-zinc-600';
+	}
+
 	function copyCurlCode() {
 		const code = `curl -X POST http://localhost:5173/api/emg \\
   -H "Content-Type: application/json" \\
@@ -207,6 +211,13 @@
 					<span class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono {telemetry.isWsConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'}">
 						<span class="w-1.5 h-1.5 rounded-full {telemetry.isWsConnected ? 'bg-emerald-500' : 'bg-zinc-500'}"></span>
 						{telemetry.isWsConnected ? 'HARDWARE LIVE' : 'HARDWARE OFFLINE'}
+					</span>
+					<span
+						class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700"
+						title="EMG sensor: {telemetry.sensorStatus.emg}"
+					>
+						<span class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.emg)}"></span>
+						EMG
 					</span>
 				</div>
 				<p class="text-[11px] text-zinc-400 font-mono">

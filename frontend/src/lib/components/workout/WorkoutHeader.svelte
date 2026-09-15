@@ -69,12 +69,25 @@
 
 			<!-- Hardware Connection Status Indicator -->
 			<div
-				class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-sans {telemetry.isWsConnected
+				class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-sans {telemetry.connectionState ===
+				'connected'
 					? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-					: 'border-zinc-800 bg-zinc-900 text-zinc-500'}"
+					: telemetry.connectionState === 'reconnecting' || telemetry.connectionState === 'connecting'
+						? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+						: 'border-rose-500/40 bg-rose-500/10 text-rose-400'}"
 			>
-				<Plug size={13} weight={telemetry.isWsConnected ? 'fill' : 'regular'} />
-				<span>{telemetry.isWsConnected ? `Hardware Live (${telemetry.streamHz}Hz)` : 'Hardware Offline'}</span>
+				<Plug size={13} weight={telemetry.connectionState === 'connected' ? 'fill' : 'regular'} />
+				<span>
+					{#if telemetry.connectionState === 'connected'}
+						Hardware Live ({telemetry.streamHz}Hz)
+					{:else if telemetry.connectionState === 'connecting'}
+						Connecting...
+					{:else if telemetry.connectionState === 'reconnecting'}
+						Reconnecting...
+					{:else}
+						Connection Lost
+					{/if}
+				</span>
 			</div>
 
 			<!-- Logout -->

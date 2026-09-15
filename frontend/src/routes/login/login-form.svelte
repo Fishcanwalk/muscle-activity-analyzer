@@ -42,7 +42,7 @@
 
 	function selectDemoUser(email: string) {
 		$formData.email = email;
-		$formData.password = 'password123';
+		$formData.password = 'cyberpump123';
 		if (formRef) {
 			setTimeout(() => {
 				formRef?.requestSubmit();
@@ -53,8 +53,10 @@
 
 <div class="mx-auto w-full max-w-sm space-y-4">
 	<!-- Branding -->
-	<div class="text-center space-y-1">
-		<div class="inline-flex items-center justify-center p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-emerald-400">
+	<div class="space-y-1 text-center">
+		<div
+			class="inline-flex items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 text-emerald-400"
+		>
 			<Lightning size={24} weight="fill" />
 		</div>
 		<h1 class="text-xl font-bold tracking-tight text-zinc-100">CYBERPUMP</h1>
@@ -62,8 +64,8 @@
 	</div>
 
 	<!-- Demo Accounts Quick Select -->
-	<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
-		<div class="flex items-center justify-between text-xs text-zinc-400 px-1 font-medium">
+	<div class="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+		<div class="flex items-center justify-between px-1 text-xs font-medium text-zinc-400">
 			<span>เลือกโปรไฟล์ผู้ใช้งาน</span>
 			<span class="text-[10px] text-zinc-400">1-Click Login</span>
 		</div>
@@ -73,14 +75,18 @@
 					type="button"
 					disabled={$submitting}
 					onclick={() => selectDemoUser(u.email)}
-					class="w-full flex items-center justify-between p-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 hover:bg-zinc-800 hover:border-zinc-700 transition text-left group disabled:opacity-50"
+					class="group flex w-full items-center justify-between rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5 text-left transition hover:border-zinc-700 hover:bg-zinc-800 disabled:opacity-50"
 				>
 					<div class="flex items-center gap-2.5">
-						<span class="w-8 h-8 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-xs font-semibold text-zinc-200 group-hover:border-zinc-700">
+						<span
+							class="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-xs font-semibold text-zinc-200 group-hover:border-zinc-700"
+						>
 							{u.avatar}
 						</span>
 						<div>
-							<div class="text-xs font-medium text-zinc-200 group-hover:text-emerald-400 transition-colors">
+							<div
+								class="text-xs font-medium text-zinc-200 transition-colors group-hover:text-emerald-400"
+							>
 								{u.name}
 							</div>
 							<div class="text-[11px] text-zinc-400">
@@ -88,7 +94,10 @@
 							</div>
 						</div>
 					</div>
-					<ArrowRight size={14} class="text-zinc-500 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all" />
+					<ArrowRight
+						size={14}
+						class="text-zinc-500 transition-all group-hover:translate-x-0.5 group-hover:text-zinc-300"
+					/>
 				</button>
 			{/each}
 		</div>
@@ -106,7 +115,7 @@
 							type="email"
 							placeholder="nont@cyberpump.io"
 							bind:value={$formData.email}
-							class="h-9 bg-zinc-950 border-zinc-800 text-xs text-zinc-200"
+							class="h-9 border-zinc-800 bg-zinc-950 text-xs text-zinc-200"
 						/>
 					{/snippet}
 				</Form.Control>
@@ -121,7 +130,7 @@
 							type="password"
 							placeholder="••••••"
 							bind:value={$formData.password}
-							class="h-9 bg-zinc-950 border-zinc-800 text-xs text-zinc-200"
+							class="h-9 border-zinc-800 bg-zinc-950 text-xs text-zinc-200"
 						/>
 					{/snippet}
 				</Form.Control>
@@ -133,9 +142,18 @@
 				</div>
 			{/if}
 
-			<Button type="submit" class="w-full h-9 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-semibold text-xs mt-1" disabled={$submitting}>
+			<Button
+				type="submit"
+				class="mt-1 h-9 w-full bg-emerald-500 text-xs font-semibold text-zinc-950 hover:bg-emerald-600"
+				disabled={$submitting}
+			>
 				เข้าสู่ระบบ
 			</Button>
 		</form>
 	</div>
+
+	<p class="text-center text-xs text-zinc-400">
+		ยังไม่มีบัญชี?
+		<a href="/register" class="text-emerald-400 hover:underline">สมัครสมาชิก</a>
+	</p>
 </div>

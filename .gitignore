@@ -1,6 +1,14 @@
 # PlatformIO build artifacts
 test-sensor/.pio/
 
+# Python / backend
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.venv/
+backend/.env
+!backend/.env.example
+
 # OS
 .DS_Store
 Thumbs.db
