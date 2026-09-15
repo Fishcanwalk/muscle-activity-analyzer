@@ -1,7 +1,5 @@
 <script lang="ts">
 	import type { PageProps } from './$types';
-	import { enhance } from '$app/forms';
-	import { userManager, type UserProfile } from '$lib/workout/user.svelte';
 	import {
 		Lightning,
 		Barbell,
@@ -14,20 +12,13 @@
 		CalendarBlank,
 		ArrowUpRight,
 		SignOut,
-		User,
 		Target,
 		Pulse
 	} from 'phosphor-svelte';
 
 	let { data }: PageProps = $props();
 
-	let selectedUser = $state<UserProfile | null>(null);
-	let currentUser = $derived<UserProfile>(selectedUser ?? data.user);
-
-	function switchLocalUser(user: UserProfile) {
-		selectedUser = user;
-		userManager.switchUser(user.email);
-	}
+	let currentUser = $derived(data.user);
 </script>
 
 <svelte:head>
@@ -49,33 +40,8 @@
 				</div>
 			</div>
 
-			<!-- User Switcher & Actions -->
+			<!-- Actions -->
 			<div class="flex items-center gap-2">
-				<!-- User selector pills -->
-				<div class="hidden md:flex items-center gap-1 bg-zinc-900/80 border border-zinc-800 p-1 rounded-lg">
-					{#each data.presetUsers as u}
-						<form action="?/switchUser" method="POST" use:enhance={() => {
-							return async ({ result }) => {
-								if (result.type === 'success') {
-									switchLocalUser(u);
-								}
-							};
-						}}>
-							<input type="hidden" name="email" value={u.email} />
-							<button
-								type="submit"
-								onclick={() => switchLocalUser(u)}
-								class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition {currentUser.email === u.email
-									? 'bg-zinc-800 text-zinc-100 font-medium'
-									: 'text-zinc-400 hover:text-zinc-200'}"
-							>
-								<span class="text-[10px] font-mono text-zinc-400">{u.avatar}</span>
-								<span>{u.name.split(' ')[0]}</span>
-							</button>
-						</form>
-					{/each}
-				</div>
-
 				<a
 					href="/home"
 					class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs transition shadow-sm"
@@ -99,22 +65,6 @@
 	</header>
 
 	<main class="max-w-6xl mx-auto px-4 pt-6 space-y-6">
-		<!-- Mobile User Switcher -->
-		<div class="flex md:hidden items-center gap-1 overflow-x-auto pb-1">
-			{#each data.presetUsers as u}
-				<button
-					type="button"
-					onclick={() => switchLocalUser(u)}
-					class="flex items-center gap-1 px-2.5 py-1 rounded text-xs whitespace-nowrap {currentUser.email === u.email
-						? 'bg-zinc-800 text-zinc-100 font-medium border border-zinc-700'
-						: 'bg-zinc-900 text-zinc-400 border border-zinc-800'}"
-				>
-					<span class="text-[10px] font-mono text-zinc-400">{u.avatar}</span>
-					<span>{u.name.split(' ')[0]}</span>
-				</button>
-			{/each}
-		</div>
-
 		<!-- User Summary Bar -->
 		<div class="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
 			<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -155,7 +105,7 @@
 						<ShieldCheck size={14} class="text-cyan-400" />
 						<span class="text-zinc-400">Purity:</span>
 						<span class="font-semibold text-emerald-400">
-							{currentUser.formProgression[currentUser.formProgression.length - 1]?.purity || 92}%
+							{currentUser.formProgression[currentUser.formProgression.length - 1]?.purity ?? 0}%
 						</span>
 					</div>
 				</div>
@@ -340,9 +290,11 @@
 									<span class="text-amber-400">+{log.pumpDeltaT}°C</span>
 								</div>
 							</div>
-							<div class="text-[11px] text-zinc-400 mt-2 pl-2 border-l border-zinc-700 font-sans">
-								{log.notes}
-							</div>
+							{#if log.notes}
+								<div class="text-[11px] text-zinc-400 mt-2 pl-2 border-l border-zinc-700 font-sans">
+									{log.notes}
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
