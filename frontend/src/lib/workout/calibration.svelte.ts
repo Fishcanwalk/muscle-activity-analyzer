@@ -23,20 +23,51 @@ class CalibrationManager {
 		wifiRssi: '-58 dBm (Strong)'
 	});
 
+	private async postCalibration(body: Record<string, number>) {
+		try {
+			await fetch('/api/calibration', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+		} catch {
+			// Server unreachable (e.g. offline dev preview); keep the local value so the UI still works.
+		}
+	}
+
+	async loadFromServer() {
+		try {
+			const res = await fetch('/api/calibration');
+			if (!res.ok) return;
+			const { calibration: cal } = await res.json();
+			if (!cal) return;
+			this.emgZeroOffsetUv = cal.emgBaseline;
+			this.emgMvcPeakUv = cal.emgMvc;
+			this.fsrZeroAdc = cal.fsrZero;
+			this.fsrMaxGripAdc = cal.fsrMax;
+		} catch {
+			// Keep local defaults if the server can't be reached.
+		}
+	}
+
 	calibrateEmgZero(val = 14) {
 		this.emgZeroOffsetUv = val;
+		this.postCalibration({ emgBaseline: val });
 	}
 
 	calibrateEmgMvc(val = 580) {
 		this.emgMvcPeakUv = val;
+		this.postCalibration({ emgMvc: val });
 	}
 
 	calibrateFsrZero(val = 10) {
 		this.fsrZeroAdc = val;
+		this.postCalibration({ fsrZero: val });
 	}
 
 	calibrateFsrMax(val = 3900) {
 		this.fsrMaxGripAdc = val;
+		this.postCalibration({ fsrMax: val });
 	}
 
 	setTorsoLimit(deg: number) {

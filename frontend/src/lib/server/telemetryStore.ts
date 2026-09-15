@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
 
 export interface EmgPacket {
 	raw?: number | number[];
@@ -59,19 +60,26 @@ const HIGH_TENSION_UV_THRESHOLD = 280;
 // Assumed full-scale grip force (Newtons) at max ADC reading; calibrate via fsrMax.
 const FSR_MAX_N = 50;
 
-function adcToEmgUv(rawAdc: number): number {
+// `baseline` is the calibrated rest-state µV reading (state.calibration.emgBaseline);
+// it defaults to 0 so an uncalibrated system reproduces the old, unadjusted conversion.
+function adcToEmgUv(rawAdc: number, baseline = 0): number {
 	const centered = rawAdc - ADC_MAX / 2;
 	const mv = (centered / ADC_MAX) * ADC_VREF_MV;
-	return (mv * 1000) / EMG_GAIN;
+	return (mv * 1000) / EMG_GAIN - baseline;
 }
 
-function adcToForceN(rawAdc: number): number {
-	return (Math.max(0, rawAdc) / ADC_MAX) * FSR_MAX_N;
+// `zeroAdc`/`maxAdc` come from state.calibration.fsrZero/fsrMax — both raw ADC counts
+// (the "zero grip" and "max grip" readings captured during calibration). They default
+// to 0 and ADC_MAX so an uncalibrated system reproduces the old raw-ADC-over-full-range
+// math. The Newtons full scale (FSR_MAX_N) stays a fixed constant, not user-calibrated.
+function adcToForceN(rawAdc: number, zeroAdc = 0, maxAdc = ADC_MAX): number {
+	const span = Math.max(1, maxAdc - zeroAdc);
+	return (Math.max(0, rawAdc - zeroAdc) / span) * FSR_MAX_N;
 }
 
 class ServerTelemetryState {
 	private emitter = new EventEmitter();
-	private rawBuffer: number[] = Array(150).fill(20);
+	private rawBuffer: number[] = Array(EMG_BUFFER_SIZE).fill(20);
 	private packetCount = 0;
 	private lastPacketTime = Date.now();
 	private packetsPerSec = 0;
@@ -118,7 +126,7 @@ class ServerTelemetryState {
 			emgBaseline: 20.0,
 			emgMvc: 550.0,
 			fsrZero: 0.0,
-			fsrMax: FSR_MAX_N
+			fsrMax: ADC_MAX
 		}
 	};
 
@@ -133,12 +141,13 @@ class ServerTelemetryState {
 		const rawAdc = Array.isArray(data.raw)
 			? (data.raw[data.raw.length - 1] ?? 20)
 			: (data.raw ?? 20);
-		const emgUv = adcToEmgUv(rawAdc);
+		const emgBaseline = this.state.calibration.emgBaseline;
+		const emgUv = adcToEmgUv(rawAdc, emgBaseline);
 
 		if (Array.isArray(data.raw)) {
 			for (const r of data.raw) {
 				this.rawBuffer.shift();
-				this.rawBuffer.push(round3(adcToEmgUv(r)));
+				this.rawBuffer.push(round3(adcToEmgUv(r, emgBaseline)));
 			}
 		} else {
 			this.rawBuffer.shift();
@@ -177,12 +186,13 @@ class ServerTelemetryState {
 			const rawAdc = Array.isArray(data.emg.raw)
 				? (data.emg.raw[data.emg.raw.length - 1] ?? 20)
 				: (data.emg.raw ?? 20);
-			const emgUv = adcToEmgUv(rawAdc);
+			const emgBaseline = this.state.calibration.emgBaseline;
+			const emgUv = adcToEmgUv(rawAdc, emgBaseline);
 
 			if (Array.isArray(data.emg.raw)) {
 				for (const r of data.emg.raw) {
 					this.rawBuffer.shift();
-					this.rawBuffer.push(round3(adcToEmgUv(r)));
+					this.rawBuffer.push(round3(adcToEmgUv(r, emgBaseline)));
 				}
 			} else {
 				this.rawBuffer.shift();
@@ -213,7 +223,13 @@ class ServerTelemetryState {
 		if (data.fsr) {
 			const forceN =
 				data.fsr.force !== undefined
-					? round3(adcToForceN(data.fsr.force))
+					? round3(
+							adcToForceN(
+								data.fsr.force,
+								this.state.calibration.fsrZero,
+								this.state.calibration.fsrMax
+							)
+						)
 					: this.state.fsr.gripForce;
 			this.state.fsr = {
 				gripForce: forceN,

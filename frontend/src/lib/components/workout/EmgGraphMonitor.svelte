@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec } from '$lib/utils/format';
+	import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
 	import {
 		Lightning,
 		Play,
@@ -32,29 +33,31 @@
 	let meanRms = $state<number>(0);
 	let rmsHistory: number[] = [];
 
-	// Local buffer for smooth rendering
-	const BUFFER_SIZE = 200;
+	// Local buffer for rendering, kept in sync with the server's rolling EMG buffer
+	// (same size, shared via EMG_BUFFER_SIZE) so every sample that arrives gets drawn.
+	const BUFFER_SIZE = EMG_BUFFER_SIZE;
 	let waveBuffer: number[] = Array(BUFFER_SIZE).fill(0);
 
-	function updateWaveform() {
-		if (isPaused) {
-			animationFrameId = requestAnimationFrame(updateWaveform);
-			return;
-		}
+	// Runs once per incoming telemetry batch (not once per animation frame), so every
+	// sample the server sent is captured instead of only the single latest value.
+	$effect(() => {
+		const incoming = telemetry.emg.rawBuffer;
+		if (isPaused || incoming.length === 0) return;
 
-		// Pull latest from telemetry
-		const currentRaw = telemetry.emg.rawBuffer[telemetry.emg.rawBuffer.length - 1] ?? 0;
+		waveBuffer =
+			incoming.length >= BUFFER_SIZE
+				? incoming.slice(-BUFFER_SIZE)
+				: [...Array(BUFFER_SIZE - incoming.length).fill(0), ...incoming];
+
 		const currentRms = telemetry.emg.rms;
-
-		waveBuffer.shift();
-		waveBuffer.push(currentRaw);
-
 		rmsHistory.push(currentRms);
 		if (rmsHistory.length > 50) rmsHistory.shift();
 
 		meanRms = Math.round(rmsHistory.reduce((a, b) => a + b, 0) / rmsHistory.length);
 		if (currentRms > peakUv) peakUv = currentRms;
+	});
 
+	function updateWaveform() {
 		drawCanvas();
 		animationFrameId = requestAnimationFrame(updateWaveform);
 	}

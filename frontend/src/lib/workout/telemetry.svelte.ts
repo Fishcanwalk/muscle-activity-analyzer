@@ -1,11 +1,12 @@
 import { workout } from './workout.svelte';
 import { round3, formatDec } from '$lib/utils/format';
+import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
 
 export { round3, formatDec };
 
 class TelemetryManager {
 	emg = $state({
-		rawBuffer: Array(80).fill(0),
+		rawBuffer: Array(EMG_BUFFER_SIZE).fill(0),
 		rms: 0,
 		mvcPercent: 0,
 		isHighTension: false
@@ -47,6 +48,9 @@ class TelemetryManager {
 	streamHz = $state(0);
 
 	private eventSource: EventSource | null = null;
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private reconnectDelayMs = 1000;
+	private readonly RECONNECT_MAX_DELAY_MS = 30000;
 
 	// Real camera FSM tracker
 	private hadPeakInCurrentRep = false;
@@ -62,14 +66,22 @@ class TelemetryManager {
 
 	connectApiStream() {
 		if (typeof window === 'undefined') return;
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
 		try {
 			if (this.eventSource) this.eventSource.close();
 			this.eventSource = new EventSource('/api/telemetry/stream');
+			this.eventSource.addEventListener('open', () => {
+				this.reconnectDelayMs = 1000;
+			});
 			this.eventSource.addEventListener('telemetry', (e) => {
 				try {
 					const data = JSON.parse(e.data);
 					if (data.device?.connected) {
 						this.isWsConnected = true;
+						this.reconnectDelayMs = 1000;
 						this.streamHz = data.device.rateHz || 50;
 
 						if (data.emg) {
@@ -121,10 +133,23 @@ class TelemetryManager {
 			});
 			this.eventSource.onerror = () => {
 				this.isWsConnected = false;
+				this.eventSource?.close();
+				this.scheduleReconnect();
 			};
 		} catch (err) {
 			console.warn('[Telemetry] SSE stream connect error', err);
+			this.scheduleReconnect();
 		}
+	}
+
+	private scheduleReconnect() {
+		if (this.reconnectTimer) return;
+		const delay = this.reconnectDelayMs;
+		this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.RECONNECT_MAX_DELAY_MS);
+		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
+			this.connectApiStream();
+		}, delay);
 	}
 
 	setWebcamActive(active: boolean) {

@@ -1,9 +1,14 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { calibration } from '$lib/workout/calibration.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { CheckCircle2, Sliders, Cpu, Activity } from 'lucide-svelte';
 
 	let calMsg = $state('');
+
+	onMount(() => {
+		calibration.loadFromServer();
+	});
 
 	function flashMsg(msg: string) {
 		calMsg = msg;
