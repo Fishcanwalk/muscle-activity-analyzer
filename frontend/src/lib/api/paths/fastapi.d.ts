@@ -13,8 +13,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Register */
-        post: operations["registerUser"];
+        /** Register User */
+        post: operations["register_user_v1_auth_register_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -30,8 +30,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
-        post: operations["loginUser"];
+        /** Login User */
+        post: operations["login_user_v1_auth_login_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -48,7 +48,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Refresh Token */
-        post: operations["refreshToken"];
+        post: operations["refresh_token_v1_auth_refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -64,8 +64,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Logout */
-        post: operations["logoutUser"];
+        /** Logout User */
+        post: operations["logout_user_v1_auth_logout_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -79,27 +79,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Verify Token Endpoint */
-        get: operations["verifyToken"];
+        /** Verify Token */
+        get: operations["verify_token_v1_auth_verify_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/auth/oauth/{provider}/callback": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Oauth Callback */
-        post: operations["oauthCallback"];
         delete?: never;
         options?: never;
         head?: never;
@@ -114,7 +97,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Current User Info */
-        get: operations["getCurrentUserInfo"];
+        get: operations["get_current_user_info_users_me_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -123,71 +106,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/users": {
+    "/v1/telemetry": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Users */
-        get: operations["getUsers"];
+        /** Get Telemetry History */
+        get: operations["get_telemetry_history_v1_telemetry_get"];
         put?: never;
-        post?: never;
+        /** Ingest Telemetry */
+        post: operations["ingest_telemetry_v1_telemetry_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/pets": {
+    "/v1/sessions": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Pets */
-        get: operations["getPets"];
+        /** List Session Results */
+        get: operations["list_session_results_v1_sessions_get"];
         put?: never;
-        /** Create Pet */
-        post: operations["createPet"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/pets/{pet_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Pet */
-        get: operations["getPet"];
-        /** Update Pet */
-        put: operations["updatePet"];
-        post?: never;
-        /** Delete Pet */
-        delete: operations["deletePet"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/dashboard/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Dashboard Stats */
-        get: operations["getDashboardStats"];
-        put?: never;
-        post?: never;
+        /** Create Session Result */
+        post: operations["create_session_result_v1_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -202,24 +150,7 @@ export interface paths {
             cookie?: never;
         };
         /** Health Check */
-        get: operations["healthCheck"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Root */
-        get: operations["rootEndpoint"];
+        get: operations["health_check_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -232,48 +163,164 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** DeviceState */
+        DeviceState: {
+            /** Board */
+            board?: string | null;
+            /** Connected */
+            connected?: boolean | null;
+            /** Lastseen */
+            lastSeen?: number | null;
+            /** Packetcount */
+            packetCount?: number | null;
+            /** Ratehz */
+            rateHz?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** EmgState */
+        EmgState: {
+            /** Raw */
+            raw?: number | null;
+            /** Rawbuffer */
+            rawBuffer?: number[] | null;
+            /** Rms */
+            rms?: number | null;
+            /** Peak */
+            peak?: number | null;
+            /** Mvcpercent */
+            mvcPercent?: number | null;
+            /** Ishightension */
+            isHighTension?: boolean | null;
+            /** Timestamp */
+            timestamp?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** FsrState */
+        FsrState: {
+            /** Gripforce */
+            gripForce?: number | null;
+            /** Gripstability */
+            gripStability?: number | null;
+            /** Isstable */
+            isStable?: boolean | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** OAuthCallbackRequest */
-        OAuthCallbackRequest: {
-            /** Code */
-            code: string;
-            /** State */
-            state: string;
-            /** Nonce */
-            nonce?: string | null;
-            /** Redirect Uri */
-            redirect_uri: string;
+        /** MpuState */
+        MpuState: {
+            /** Pitch */
+            pitch?: number | null;
+            /** Roll */
+            roll?: number | null;
+            /** Velocity */
+            velocity?: number | null;
+            /** Ax */
+            ax?: number | null;
+            /** Ay */
+            ay?: number | null;
+            /** Az */
+            az?: number | null;
+        } & {
+            [key: string]: unknown;
         };
-        /** Pet */
-        Pet: {
+        /** RepResult */
+        RepResult: {
+            /** Repnumber */
+            repNumber: number;
+            /** Concentricvelocity */
+            concentricVelocity: number;
+            /** Rom */
+            rom: number;
+            /** Isclean */
+            isClean: boolean;
+            /** Velocitylosspercent */
+            velocityLossPercent: number;
+            /** Peakemg */
+            peakEmg: number;
+            /** Cheatreason */
+            cheatReason?: string | null;
+        };
+        /** SessionResult */
+        SessionResult: {
+            /** Setnumber */
+            setNumber: number;
+            /** Exercise */
+            exercise: string;
+            /** Weightkg */
+            weightKg: number;
+            /** Durationseconds */
+            durationSeconds: number;
+            /** Totalreps */
+            totalReps: number;
+            /** Cleanreps */
+            cleanReps: number;
+            /** Cheatedreps */
+            cheatedReps: number;
+            /** Formpuritypercent */
+            formPurityPercent: number;
+            /** Effectivereps */
+            effectiveReps: number;
+            /** Hightensiontutseconds */
+            highTensionTutSeconds: number;
+            /** Reps */
+            reps?: components["schemas"]["RepResult"][];
+            /** Timestamp */
+            timestamp?: string | null;
             /** Id */
             id: string;
-            /** Name */
-            name: string;
-            /** Breed */
-            breed: string;
-            /** Age */
-            age: number;
-            /** Owner Id */
-            owner_id: string;
+            /** User Id */
+            user_id: string;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
         };
-        /** PetCreate */
-        PetCreate: {
-            /** Name */
-            name: string;
-            /** Breed */
-            breed: string;
-            /** Age */
-            age: number;
+        /** SessionResultCreate */
+        SessionResultCreate: {
+            /** Setnumber */
+            setNumber: number;
+            /** Exercise */
+            exercise: string;
+            /** Weightkg */
+            weightKg: number;
+            /** Durationseconds */
+            durationSeconds: number;
+            /** Totalreps */
+            totalReps: number;
+            /** Cleanreps */
+            cleanReps: number;
+            /** Cheatedreps */
+            cheatedReps: number;
+            /** Formpuritypercent */
+            formPurityPercent: number;
+            /** Effectivereps */
+            effectiveReps: number;
+            /** Hightensiontutseconds */
+            highTensionTutSeconds: number;
+            /** Reps */
+            reps?: components["schemas"]["RepResult"][];
+            /** Timestamp */
+            timestamp?: string | null;
+        };
+        /** TelemetryIngest */
+        TelemetryIngest: {
+            emg?: components["schemas"]["EmgState"] | null;
+            fsr?: components["schemas"]["FsrState"] | null;
+            mpu?: components["schemas"]["MpuState"] | null;
+            vitals?: components["schemas"]["VitalsState"] | null;
+            device?: components["schemas"]["DeviceState"] | null;
+            /** Timestamp */
+            timestamp?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /** Token */
         Token: {
@@ -299,13 +346,8 @@ export interface components {
             name: string;
             /** Avatar */
             avatar?: string | null;
-            /**
-             * Roles
-             * @default [
-             *       "user"
-             *     ]
-             */
-            roles: string[];
+            /** Roles */
+            roles?: string[];
             /**
              * Created At
              * Format: date-time
@@ -353,6 +395,19 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** VitalsState */
+        VitalsState: {
+            /** Hr */
+            hr?: number | null;
+            /** Spo2 */
+            spo2?: number | null;
+            /** Skintemp */
+            skinTemp?: number | null;
+            /** Deltatemp */
+            deltaTemp?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
     };
     responses: never;
     parameters: never;
@@ -362,7 +417,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    registerUser: {
+    register_user_v1_auth_register_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -395,7 +450,7 @@ export interface operations {
             };
         };
     };
-    loginUser: {
+    login_user_v1_auth_login_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -428,7 +483,7 @@ export interface operations {
             };
         };
     };
-    refreshToken: {
+    refresh_token_v1_auth_refresh_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -448,7 +503,7 @@ export interface operations {
             };
         };
     };
-    logoutUser: {
+    logout_user_v1_auth_logout_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -463,67 +518,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
     };
-    verifyToken: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    oauthCallback: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                provider: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OAuthCallbackRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    getCurrentUserInfo: {
+    verify_token_v1_auth_verify_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -543,7 +545,7 @@ export interface operations {
             };
         };
     };
-    getUsers: {
+    get_current_user_info_users_me_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -558,16 +560,86 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"][];
+                    "application/json": components["schemas"]["User"];
                 };
             };
         };
     };
-    getPets: {
+    get_telemetry_history_v1_telemetry_get: {
+        parameters: {
+            query?: {
+                since?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_telemetry_v1_telemetry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-service-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetryIngest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_results_v1_sessions_get: {
         parameters: {
             query?: {
                 limit?: number;
-                offset?: number;
             };
             header?: never;
             path?: never;
@@ -581,7 +653,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Pet"][];
+                    "application/json": components["schemas"]["SessionResult"][];
                 };
             };
             /** @description Validation Error */
@@ -595,7 +667,7 @@ export interface operations {
             };
         };
     };
-    createPet: {
+    create_session_result_v1_sessions_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -604,7 +676,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PetCreate"];
+                "application/json": components["schemas"]["SessionResultCreate"];
             };
         };
         responses: {
@@ -614,7 +686,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Pet"];
+                    "application/json": components["schemas"]["SessionResult"];
                 };
             };
             /** @description Validation Error */
@@ -628,104 +700,7 @@ export interface operations {
             };
         };
     };
-    getPet: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                pet_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Pet"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    updatePet: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                pet_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PetCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Pet"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deletePet: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                pet_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    getDashboardStats: {
+    health_check_health_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -740,47 +715,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    healthCheck: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    rootEndpoint: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

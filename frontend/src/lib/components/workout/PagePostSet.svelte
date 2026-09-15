@@ -4,6 +4,8 @@
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { history } from '$lib/workout/history.svelte';
 	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle } from 'lucide-svelte';
+	import fastapiClient from '$lib/api/fastapi-client';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onStartNextSet: () => void;
@@ -120,7 +122,9 @@
 		onStartNextSet();
 	}
 
-	function handleSaveSession() {
+	let isSaving = $state(false);
+
+	async function handleSaveSession() {
 		history.addCompletedSession({
 			session: new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
 			weight: currentSummary.weightKg,
@@ -130,6 +134,32 @@
 			rom: 123,
 			cleanVolume: currentSummary.weightKg * currentSummary.cleanReps
 		});
+
+		isSaving = true;
+		const { error } = await fastapiClient.POST('/v1/sessions', {
+			body: {
+				setNumber: currentSummary.setNumber,
+				exercise: currentSummary.exercise,
+				weightKg: currentSummary.weightKg,
+				durationSeconds: currentSummary.durationSeconds,
+				totalReps: currentSummary.totalReps,
+				cleanReps: currentSummary.cleanReps,
+				cheatedReps: currentSummary.cheatedReps,
+				formPurityPercent: currentSummary.formPurityPercent,
+				effectiveReps: currentSummary.effectiveReps,
+				highTensionTutSeconds: currentSummary.highTensionTutSeconds,
+				reps: currentSummary.reps,
+				timestamp: currentSummary.timestamp
+			}
+		});
+		isSaving = false;
+
+		if (error) {
+			toast.error('บันทึกผลเซสชันไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
+		} else {
+			toast.success('บันทึกผลเซสชันสำเร็จ');
+		}
+
 		onFinishSession();
 	}
 </script>
@@ -163,10 +193,11 @@
 			</button>
 			<button
 				onclick={handleSaveSession}
-				class="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 font-semibold text-foreground hover:border-cyan-500"
+				disabled={isSaving}
+				class="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 font-semibold text-foreground hover:border-cyan-500 disabled:opacity-50"
 			>
 				<Save class="h-4 w-4" />
-				<span>บันทึกผลเซสชันวันนี้</span>
+				<span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกผลเซสชันวันนี้'}</span>
 			</button>
 		</div>
 	</div>
