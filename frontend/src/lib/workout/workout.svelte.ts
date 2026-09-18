@@ -1,3 +1,7 @@
+import { history } from './history.svelte';
+import fastapiClient from '$lib/api/fastapi-client';
+import { toast } from 'svelte-sonner';
+
 export interface RepRecord {
 	repNumber: number;
 	concentricVelocity: number;
@@ -24,6 +28,7 @@ export interface SetSummary {
 }
 
 class WorkoutManager {
+	activeTab = $state<'readiness' | 'studio' | 'postset' | 'analytics' | 'calibration'>('studio');
 	exercise = $state('Biceps Curl');
 	weightKg = $state(12.5);
 	currentSet = $state(1);
@@ -133,6 +138,79 @@ class WorkoutManager {
 
 	incrementTut(seconds = 0.02) {
 		this.highTensionTutSeconds = Number((this.highTensionTutSeconds + seconds).toFixed(1));
+	}
+
+	// Shared by the "บันทึกผลเซสชันวันนี้" button (PagePostSet.svelte, with a mock
+	// fallback summary for the demo view) and handleRemoteButton below (real
+	// summary only) so both save identically.
+	async saveSummary(summary: SetSummary): Promise<{ success: boolean }> {
+		history.addCompletedSession({
+			session: new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
+			weight: summary.weightKg,
+			cleanReps: summary.cleanReps,
+			purity: summary.formPurityPercent,
+			sEmgRms: 430,
+			rom: 123,
+			cleanVolume: summary.weightKg * summary.cleanReps
+		});
+
+		const { error } = await fastapiClient.POST('/v1/sessions', {
+			body: {
+				setNumber: summary.setNumber,
+				exercise: summary.exercise,
+				weightKg: summary.weightKg,
+				durationSeconds: summary.durationSeconds,
+				totalReps: summary.totalReps,
+				cleanReps: summary.cleanReps,
+				cheatedReps: summary.cheatedReps,
+				formPurityPercent: summary.formPurityPercent,
+				effectiveReps: summary.effectiveReps,
+				highTensionTutSeconds: summary.highTensionTutSeconds,
+				reps: summary.reps,
+				timestamp: summary.timestamp
+			}
+		});
+
+		if (error) {
+			toast.error('บันทึกผลเซสชันไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
+		} else {
+			toast.success('บันทึกผลเซสชันสำเร็จ');
+		}
+
+		return { success: !error };
+	}
+
+	// Driven by the ESP32's physical buttons (GPIO32/33) over the telemetry SSE
+	// channel -- see telemetry.svelte.ts's 'button' event listener. Mirrors the
+	// exact actions the on-screen buttons trigger (see PageLiveStudio/PagePostSet).
+	//
+	// Button A: a 3-press cycle -- start set -> stop set (go to summary) -> start
+	// the next set immediately (skipping the extra "เริ่มเซตถัดไป" click).
+	// Button B: stop the current set (if running) and save it, same as clicking
+	// "จบเซต & ดูสรุปผล" followed by "บันทึกผลเซสชันวันนี้".
+	async handleRemoteButton(id: 'a' | 'b') {
+		if (id === 'a') {
+			if (this.isSetRunning) {
+				this.stopSet();
+				this.activeTab = 'postset';
+			} else if (this.activeTab === 'postset') {
+				this.nextSet();
+				this.startSet();
+				this.activeTab = 'studio';
+			} else {
+				this.startSet();
+				this.activeTab = 'studio';
+			}
+			return;
+		}
+
+		if (this.isSetRunning) this.stopSet();
+		if (!this.lastCompletedSet) {
+			toast.warning('ยังไม่มีเซตให้บันทึก');
+			return;
+		}
+		await this.saveSummary(this.lastCompletedSet);
+		this.activeTab = 'analytics';
 	}
 }
 

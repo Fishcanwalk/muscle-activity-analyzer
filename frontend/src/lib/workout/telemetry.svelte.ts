@@ -166,6 +166,14 @@ class TelemetryManager {
 					}
 				} catch (parseErr) {}
 			});
+			this.eventSource.addEventListener('button', (e) => {
+				try {
+					const data = JSON.parse(e.data);
+					if (data.id === 'a' || data.id === 'b') workout.handleRemoteButton(data.id);
+				} catch {
+					// Malformed button event -- ignore.
+				}
+			});
 			this.eventSource.onerror = () => {
 				this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
 				this.streamHz = 0;

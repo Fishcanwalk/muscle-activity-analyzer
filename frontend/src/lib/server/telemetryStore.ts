@@ -39,6 +39,12 @@ export interface FullTelemetryPacket {
 		skinTemp?: number;
 		deltaTemp?: number;
 	};
+	// Discrete "was pressed since last send" flags from the ESP32 buttons (GPIO32/33),
+	// not held-down levels -- see esp32_connectToWifi_buttons.cpp.
+	buttons?: {
+		a?: boolean;
+		b?: boolean;
+	};
 }
 
 function round3(n: number | undefined | null): number {
@@ -281,6 +287,9 @@ class ServerTelemetryState {
 			};
 			this.state.sensors.vitals.lastSeen = now;
 		}
+
+		if (data.buttons?.a) this.broadcast('button', { id: 'a' });
+		if (data.buttons?.b) this.broadcast('button', { id: 'b' });
 
 		this.broadcast('telemetry', this.state);
 		this.forwardToBackend();

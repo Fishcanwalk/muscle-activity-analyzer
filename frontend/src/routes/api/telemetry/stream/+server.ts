@@ -13,7 +13,7 @@ export const GET: RequestHandler = async () => {
 			controller.enqueue(encoder.encode(initialPacket));
 
 			// Subscribe to live telemetry
-			cleanup = serverTelemetry.subscribe('telemetry', (data) => {
+			const cleanupTelemetry = serverTelemetry.subscribe('telemetry', (data) => {
 				try {
 					const msg = `event: telemetry\ndata: ${JSON.stringify(data)}\n\n`;
 					controller.enqueue(encoder.encode(msg));
@@ -21,6 +21,21 @@ export const GET: RequestHandler = async () => {
 					// Client disconnected
 				}
 			});
+
+			// Discrete button-press events (ESP32 GPIO32/33) -- see telemetryStore.ts ingestFullTelemetry
+			const cleanupButton = serverTelemetry.subscribe('button', (data) => {
+				try {
+					const msg = `event: button\ndata: ${JSON.stringify(data)}\n\n`;
+					controller.enqueue(encoder.encode(msg));
+				} catch {
+					// Client disconnected
+				}
+			});
+
+			cleanup = () => {
+				cleanupTelemetry();
+				cleanupButton();
+			};
 		},
 		cancel() {
 			if (cleanup) cleanup();

@@ -2,10 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { workout } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
-	import { history } from '$lib/workout/history.svelte';
 	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle } from 'lucide-svelte';
-	import fastapiClient from '$lib/api/fastapi-client';
-	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onStartNextSet: () => void;
@@ -125,41 +122,9 @@
 	let isSaving = $state(false);
 
 	async function handleSaveSession() {
-		history.addCompletedSession({
-			session: new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
-			weight: currentSummary.weightKg,
-			cleanReps: currentSummary.cleanReps,
-			purity: currentSummary.formPurityPercent,
-			sEmgRms: 430,
-			rom: 123,
-			cleanVolume: currentSummary.weightKg * currentSummary.cleanReps
-		});
-
 		isSaving = true;
-		const { error } = await fastapiClient.POST('/v1/sessions', {
-			body: {
-				setNumber: currentSummary.setNumber,
-				exercise: currentSummary.exercise,
-				weightKg: currentSummary.weightKg,
-				durationSeconds: currentSummary.durationSeconds,
-				totalReps: currentSummary.totalReps,
-				cleanReps: currentSummary.cleanReps,
-				cheatedReps: currentSummary.cheatedReps,
-				formPurityPercent: currentSummary.formPurityPercent,
-				effectiveReps: currentSummary.effectiveReps,
-				highTensionTutSeconds: currentSummary.highTensionTutSeconds,
-				reps: currentSummary.reps,
-				timestamp: currentSummary.timestamp
-			}
-		});
+		await workout.saveSummary(currentSummary);
 		isSaving = false;
-
-		if (error) {
-			toast.error('บันทึกผลเซสชันไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
-		} else {
-			toast.success('บันทึกผลเซสชันสำเร็จ');
-		}
-
 		onFinishSession();
 	}
 </script>
