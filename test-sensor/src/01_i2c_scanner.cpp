@@ -33,7 +33,7 @@ void loop() {
 
   Serial.println("Scanning I2C bus...");
 
-  for (address = 1; address < 127; address++) {
+  for (address = 0; address <= 0x7F; address++) {
     Wire.beginTransmission(address);
     error = Wire.endTransmission();
 

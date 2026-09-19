@@ -6,6 +6,7 @@
 #define ADDR_MPU6050  0x68
 #define ADDR_MAX30102 0x57
 #define ADDR_MLX90614 0x5A
+#define ADDR_LCD 0x27
 
 void setup() {
   Serial.begin(115200);
@@ -30,10 +31,11 @@ void loop() {
   bool found_mpu = false;
   bool found_max = false;
   bool found_mlx = false;
+  bool found_lcd = false;
 
   Serial.println("Scanning I2C bus...");
 
-  for (address = 1; address < 127; address++) {
+  for (address = 0; address <= 0x7F; address++) {
     Wire.beginTransmission(address);
     error = Wire.endTransmission();
 
@@ -52,6 +54,9 @@ void loop() {
       } else if (address == ADDR_MLX90614) {
         Serial.print("  <-- MLX90614 (IR Temperature) [OK]");
         found_mlx = true;
+      } else if (address == x027) {
+        Serial.print("LCD is OK");
+        found_lcd = true;
       }
       Serial.println();
       nDevices++;
@@ -68,6 +73,7 @@ void loop() {
     B_PRINTF(" - MPU-6050  (0x68): %s\n", found_mpu ? "✅ CONNECTED" : "❌ NOT FOUND");
     B_PRINTF(" - MAX30102  (0x57): %s\n", found_max ? "✅ CONNECTED" : "❌ NOT FOUND");
     B_PRINTF(" - MLX90614  (0x5A): %s\n", found_mlx ? "✅ CONNECTED" : "❌ NOT FOUND");
+    B_PRINTF(" - LCD       (0x27): %s\n", found_lcd ? "✅ CONNECTED" : "❌ NOT FOUND");
   }
   Serial.println("==========================================\n");
 

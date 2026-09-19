@@ -122,6 +122,7 @@ pio run -d test-sensor -e uno_all -t upload -t monitor
 - `arduino/05_max30102_test/05_max30102_test.ino` (ทดสอบวัดชีพจร)
 - `arduino/06_mlx90614_test/06_mlx90614_test.ino` (ทดสอบวัดอุณหภูมิอินฟราเรด)
 - `arduino/07_all_diagnostics/07_all_diagnostics.ino` (ทดสอบอ่านค่ารวมทุกตัว)
+- `arduino/09_full_sensor_debug/09_full_sensor_debug.ino` (ESP32 เท่านั้น -- debug ทุกเซนเซอร์ + ปุ่มกด พร้อมกัน ผ่าน Serial Monitor เดียว โดยไม่ต้องต่อ WiFi/เซิร์ฟเวอร์ หรือจอ LCD; ใช้ logic เดียวกับ `src/esp32_connectToWifi_buttons.cpp` เช่น velocity/pitch/roll, HR/SpO2 โดยประมาณ, FSR stability)
 
 ### ขั้นตอนการตั้งค่าใน Arduino IDE:
 1. **เพิ่ม Board URL สำหรับ ESP8266 / ESP32:**
