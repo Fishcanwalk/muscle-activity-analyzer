@@ -154,7 +154,12 @@ class TelemetryManager {
 						}
 
 						if (data.vitals) {
-							if (data.vitals.hr !== undefined) this.vitals.heartRate = round3(data.vitals.hr);
+							if (data.vitals.hr !== undefined) {
+								this.vitals.heartRate = round3(data.vitals.hr);
+								if (this.vitals.heartRate > this.vitals.peakHr) {
+									this.vitals.peakHr = this.vitals.heartRate;
+								}
+							}
 							if (data.vitals.spo2 !== undefined) this.vitals.spO2 = round3(data.vitals.spo2);
 							if (data.vitals.skinTemp !== undefined) {
 								this.vitals.skinTemp = round3(data.vitals.skinTemp);

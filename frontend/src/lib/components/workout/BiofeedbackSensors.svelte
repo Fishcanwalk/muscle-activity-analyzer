@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec } from '$lib/utils/format';
-	import { Gauge, Target, HandPalm, Heartbeat, ThermometerSimple, TrendDown } from 'phosphor-svelte';
+	import { Gauge, Target, HandPalm, Heartbeat, ThermometerSimple, TrendDown, Drop } from 'phosphor-svelte';
 
 	function statusDotClass(status: 'live' | 'stale' | 'never') {
 		return status === 'live' ? 'bg-emerald-500' : status === 'stale' ? 'bg-amber-500' : 'bg-zinc-600';
@@ -72,6 +72,11 @@
 				style="width: {Math.min(100, telemetry.mpu.velocityLossPercent)}%;"
 			></div>
 		</div>
+
+		<div class="flex items-center justify-between pt-1.5 mt-1.5 border-t border-zinc-800/80 text-[10px] font-mono">
+			<span class="text-zinc-400">Rep 1 Velocity (baseline)</span>
+			<span class="text-zinc-200 font-semibold">{formatDec(telemetry.mpu.rep1Velocity)} m/s</span>
+		</div>
 	</div>
 
 	<!-- FSR Grip Force Card (1 column) -->
@@ -88,7 +93,16 @@
 		</div>
 
 		<div class="py-2">
-			<div class="text-[11px] text-zinc-400 font-mono">Grip Force</div>
+			<div class="flex items-center justify-between">
+				<div class="text-[11px] text-zinc-400 font-mono">Grip Force</div>
+				<span
+					class="rounded-full border px-1.5 py-0.5 text-[9px] font-mono uppercase {telemetry.fsr.isStable
+						? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+						: 'border-amber-500/40 bg-amber-500/10 text-amber-400'}"
+				>
+					{telemetry.fsr.isStable ? 'Stable' : 'Unstable'}
+				</span>
+			</div>
 			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
 				{formatDec(telemetry.fsr.gripForce)} <span class="text-xs font-normal text-zinc-400 font-sans">N</span>
 			</div>
@@ -119,7 +133,10 @@
 		</div>
 
 		<div class="py-2">
-			<div class="text-[11px] text-zinc-400 font-mono">Heart Rate</div>
+			<div class="flex items-center justify-between">
+				<div class="text-[11px] text-zinc-400 font-mono">Heart Rate</div>
+				<span class="text-[10px] font-mono text-zinc-500">Peak {formatDec(telemetry.vitals.peakHr)} BPM</span>
+			</div>
 			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
 				{formatDec(telemetry.vitals.heartRate)} <span class="text-xs font-normal text-zinc-400 font-sans">BPM</span>
 			</div>
@@ -127,10 +144,23 @@
 
 		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
 			<span class="text-zinc-400 flex items-center gap-1">
-				<ThermometerSimple size={13} class="text-amber-400" />
-				Pump Temp:
+				<Drop size={13} class="text-sky-400" />
+				SpO2:
 			</span>
-			<span class="text-amber-400 font-semibold">+{formatDec(telemetry.vitals.deltaTemp)}°C</span>
+			<span class="text-sky-400 font-semibold">{formatDec(telemetry.vitals.spO2)}%</span>
+		</div>
+
+		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
+			<span class="text-zinc-400 flex items-center gap-1">
+				<ThermometerSimple size={13} class="text-amber-400" />
+				Skin Temp:
+			</span>
+			<span class="text-amber-400 font-semibold">
+				{formatDec(telemetry.vitals.skinTemp)}°C
+				<span class="text-zinc-500 font-normal"
+					>({telemetry.vitals.deltaTemp >= 0 ? '+' : ''}{formatDec(telemetry.vitals.deltaTemp)}°C)</span
+				>
+			</span>
 		</div>
 	</div>
 </div>

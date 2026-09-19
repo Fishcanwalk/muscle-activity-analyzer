@@ -103,7 +103,11 @@ class RecordingManager {
 	exportCsv() {
 		if (!this.hasSamples) return;
 		const headers = Object.keys(this.samples[0]) as (keyof RecordingSample)[];
-		const rows = this.samples.map((sample) => headers.map((key) => sample[key]).join(','));
+		const rows = this.samples.map((sample) =>
+			headers
+				.map((key) => (key === 'timestamp' ? new Date(sample[key]).toISOString() : sample[key]))
+				.join(',')
+		);
 		const csv = [headers.join(','), ...rows].join('\n');
 		const blob = new Blob([csv], { type: 'text/csv' });
 		this.triggerDownload(blob, `${this.filenameBase()}.csv`);

@@ -336,13 +336,13 @@
 		</div>
 
 		<!-- Signal Quality / Rate -->
-		<!-- <div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
+		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
 			<div class="text-[10px] text-zinc-400 uppercase">Stream Rate</div>
 			<div class="text-xl font-bold text-emerald-400">
 				{telemetry.streamHz} <span class="text-xs font-normal text-zinc-400 font-sans">Hz</span>
 			</div>
-			<div class="text-[10px] text-zinc-400">20ms PACKET INTERVAL</div>
-		</div> -->
+			<div class="text-[10px] text-zinc-400">SERVER PACKET RATE</div>
+		</div>
 	</div>
 
 	<!-- Oscilloscope Canvas Container -->

@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { workout } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
+	import { formatDec } from '$lib/utils/format';
 	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle } from 'lucide-svelte';
 
 	interface Props {
@@ -13,6 +14,33 @@
 
 	let restSecondsLeft = $state(120);
 	let restTimer: any = null;
+
+	// Live MAX30102 heart-rate recovery: peak is the session-wide max seen so far
+	// (telemetry.vitals.peakHr), current updates live while resting on this page.
+	let hrrPeak = $derived(Math.round(telemetry.vitals.peakHr));
+	let hrrCurrent = $derived(Math.round(telemetry.vitals.heartRate));
+	let hrrDrop = $derived(hrrPeak - hrrCurrent);
+	let hrrTone = $derived(
+		hrrPeak === 0 ? 'muted' : hrrDrop >= 30 ? 'emerald' : hrrDrop >= 15 ? 'cyan' : 'amber'
+	);
+	let hrrLabel = $derived(
+		hrrPeak === 0
+			? 'No Heart Rate Data'
+			: hrrDrop >= 30
+				? 'Excellent Recovery (>30 BPM drop in 1 min)'
+				: hrrDrop >= 15
+					? 'Good Recovery (15-30 BPM drop)'
+					: 'Needs More Rest (<15 BPM drop)'
+	);
+	let hrrMessage = $derived(
+		hrrPeak === 0
+			? 'ยังไม่มีข้อมูลอัตราการเต้นหัวใจ วางนิ้วบนเซนเซอร์ MAX30102'
+			: hrrDrop >= 30
+				? 'การฟื้นตัวของระบบหัวใจและหลอดเลือดอยู่ในเกณฑ์ยอดเยี่ยม ร่างกายพร้อมสำหรับเซตถัดไป'
+				: hrrDrop >= 15
+					? 'การฟื้นตัวอยู่ในเกณฑ์ดี พักต่ออีกสักครู่ก่อนเริ่มเซตถัดไป'
+					: 'หัวใจยังฟื้นตัวไม่เต็มที่ แนะนำพักเพิ่มก่อนเริ่มเซตถัดไป'
+	);
 
 	let currentSummary = $derived(
 		workout.lastCompletedSet || {
@@ -204,7 +232,7 @@
 					<div class="rounded-lg border border-border bg-background/50 p-3">
 						<span class="text-xs text-muted-foreground">Muscle Pump (MLX90614)</span>
 						<div class="text-xl font-black text-amber-400">
-							+{telemetry.vitals.deltaTemp || '1.8'} <span class="text-xs font-normal text-muted-foreground">°C</span>
+							{telemetry.vitals.deltaTemp >= 0 ? '+' : ''}{formatDec(telemetry.vitals.deltaTemp)} <span class="text-xs font-normal text-muted-foreground">°C</span>
 						</div>
 						<span class="text-xs text-amber-400">Local Hyperemia 🔥</span>
 					</div>
@@ -312,24 +340,32 @@
 				<div class="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-border bg-background/50 p-4 text-center">
 					<div>
 						<span class="text-xs text-muted-foreground">Peak ขณะยก</span>
-						<div class="text-lg font-black text-destructive">148 <span class="text-xs font-normal">BPM</span></div>
+						<div class="text-lg font-black text-destructive">{hrrPeak} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 					<div>
-						<span class="text-xs text-muted-foreground">ปัจจุบัน (พัก 1 นาที)</span>
-						<div class="text-lg font-black text-emerald-400">108 <span class="text-xs font-normal">BPM</span></div>
+						<span class="text-xs text-muted-foreground">ปัจจุบัน (พัก)</span>
+						<div class="text-lg font-black text-emerald-400">{hrrCurrent} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 					<div>
 						<span class="text-xs text-muted-foreground">อัตราลดลง (HRR)</span>
-						<div class="text-lg font-black text-cyan-400">-40 <span class="text-xs font-normal">BPM</span></div>
+						<div class="text-lg font-black text-cyan-400">{-hrrDrop} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 				</div>
 
 				<div class="mt-3">
-					<span class="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-3 py-0.5 text-xs font-bold text-emerald-400">
-						Excellent Recovery (>30 BPM drop in 1 min)
+					<span
+						class="rounded-full border px-3 py-0.5 text-xs font-bold {hrrTone === 'emerald'
+							? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+							: hrrTone === 'cyan'
+								? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-400'
+								: hrrTone === 'amber'
+									? 'border-amber-500/40 bg-amber-500/15 text-amber-400'
+									: 'border-border bg-muted/30 text-muted-foreground'}"
+					>
+						{hrrLabel}
 					</span>
 					<p class="mt-1 text-xs text-muted-foreground">
-						การฟื้นตัวของระบบหัวใจและหลอดเลือดอยู่ในเกณฑ์ยอดเยี่ยม ร่างกายพร้อมสำหรับเซตถัดไป
+						{hrrMessage}
 					</p>
 				</div>
 			</div>

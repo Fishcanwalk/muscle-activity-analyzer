@@ -38,6 +38,14 @@ LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 // the web app's rep counter (camera-driven); nothing increments this yet.
 int repCount = 0;
 
+// Local set timer shown on the LCD, driven purely by the button presses below --
+// rep count and elapsed time are display-only and are never sent to the web app
+// (see the `buttons` payload further down, which carries only discrete press events).
+bool setActive = false;
+unsigned long setStartMs = 0;
+unsigned long restStartMs = 0; // when the current rest period began (set stopped/reset)
+int setCount = 0; // increments each time a new set starts (button A), shown on line 1
+
 // MPU6050/6500-compatible raw driver.
 // Adafruit_MPU6050 hard-rejects any chip whose WHO_AM_I isn't exactly 0x68, but
 // this board's module is actually an MPU6500 (WHO_AM_I 0x70) -- register-compatible
@@ -92,17 +100,25 @@ void mpuReadAccelMs2(float &ax, float &ay, float &az) {
 // ----------------------------------------------------
 // ข้อมูลสำหรับล็อกอิน CoEIoT (WPA2-Personal)
 // ----------------------------------------------------
-const char* ssid     = "CoEIoT";
-const char* password = "iot.coe.psu.ac.th";
+const char* ssid     = "Nig";
+const char* password = "chicken123123";
 
 // IP คอมพิวเตอร์ของคุณ (ดูจากคำสั่ง hostname -I บนคอม)
-const char* serverUrl = "http://172.30.95.53:5173/api/telemetry";
+const char* serverUrl = "http://172.20.10.3:5173/api/telemetry";
 
 // ----------------------------------------------------
 // Sensor objects (see docs/sensor_usage.md for the 6-sensor fusion design)
 // ----------------------------------------------------
 MAX30105          max30102;
 Adafruit_MLX90614 mlx;
+
+// Persistent HTTP client + TCP connection, reused across every telemetry POST
+// instead of reconnecting from scratch each cycle -- a fresh TCP handshake was
+// taking 80-110ms out of every 100ms send interval, starving the 100Hz sensor
+// sampling loop (MAX30102 beat detection needs continuous sampling to see the
+// pulse waveform; the MPU velocity integration's dt also got skewed by the stall).
+WiFiClient httpClient;
+HTTPClient http;
 
 bool statusMpu = false;
 bool statusMax = false;
@@ -113,7 +129,11 @@ bool statusMlx = false;
 // but only POST to the web API at a lower rate to cut WiFi/HTTP overhead.
 // ----------------------------------------------------
 const unsigned long SAMPLE_INTERVAL_MS = 10;  // 100 Hz local sensor sampling
-const unsigned long SEND_INTERVAL_MS   = 100; // 10 Hz network send (was 20 Hz/50ms)
+// 4 Hz network send (was 10 Hz/100ms) -- http.POST() blocks the loop for tens
+// of ms per call, which was starving the 100Hz sampling MAX30102's beat
+// detection needs to see the pulse waveform; sending less often gives it more
+// uninterrupted room between blocking calls.
+const unsigned long SEND_INTERVAL_MS   = 250;
 const int EMG_BATCH_CAPACITY = (SEND_INTERVAL_MS / SAMPLE_INTERVAL_MS) + 2; // small margin for jitter
 int emgBatch[EMG_BATCH_CAPACITY];
 int emgBatchCount = 0;
@@ -224,12 +244,19 @@ void setup() {
     Serial.println("[I2C] MAX30102  (0x57) -> FAILED (hr/spo2 will read 0)");
   }
 
+  // max30102.begin() calls Wire.setClock(I2C_SPEED_FAST) internally, silently
+  // undoing the conservative 100kHz speed set above -- put it back before the
+  // rest of the bus (MLX90614, LCD, MPU reads in the main loop) uses it, or
+  // the faster clock causes intermittent timeouts on breadboard/long wiring.
+  Wire.setClock(100000);
+
   for (int attempt = 0; attempt < 5 && !statusMlx; attempt++) {
     if (attempt > 0) delay(100);
     statusMlx = mlx.begin(0x5A, &Wire);
   }
   if (statusMlx) {
-    skinTempBaseline = mlx.readObjectTempC();
+    float baseline = mlx.readObjectTempC();
+    if (!isnan(baseline)) skinTempBaseline = baseline;
     Serial.println("[I2C] MLX90614  (0x5A) -> OK");
   } else {
     Serial.println("[I2C] MLX90614  (0x5A) -> FAILED (skinTemp/deltaTemp will read 0)");
@@ -238,6 +265,10 @@ void setup() {
   for (int i = 0; i < FSR_WINDOW_SAMPLES; i++) fsrHistory[i] = 0;
 
   connectWiFi();
+
+  http.begin(httpClient, serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setReuse(true); // keep the TCP connection open between POSTs
 }
 
 void updateFsrStability(int fsrVal) {
@@ -264,14 +295,20 @@ float computeFsrStability() {
 
 // Detects a HIGH->LOW (pressed) transition, ignoring further edges for
 // BUTTON_DEBOUNCE_MS to filter contact bounce. Sets `eventFlag` true on a
-// clean press; the caller latches it until the next network send.
-void pollButtonEdge(int pin, bool &lastLevel, unsigned long &lastEdgeMs, bool &eventFlag, unsigned long now) {
+// clean press; the caller latches it until the next network send. Also
+// returns true for just this one tick, so callers needing a one-shot
+// (e.g. the local LCD set timer) don't have to wait for/interfere with
+// that network-send latch.
+bool pollButtonEdge(int pin, bool &lastLevel, unsigned long &lastEdgeMs, bool &eventFlag, unsigned long now) {
   bool level = (digitalRead(pin) == LOW);
+  bool justPressed = false;
   if (level && !lastLevel && (now - lastEdgeMs) >= BUTTON_DEBOUNCE_MS) {
     eventFlag = true;
+    justPressed = true;
     lastEdgeMs = now;
   }
   lastLevel = level;
+  return justPressed;
 }
 
 void updateSpo2Window(long irValue, long redValue) {
@@ -298,14 +335,27 @@ void updateSpo2Window(long irValue, long redValue) {
   }
 }
 
-// Line 1: rep count (the value this file exists to show).
-// Line 2: concentric velocity (m/s, VBT) + heart rate (bpm) -- the two numbers
-// most relevant to "how was that rep" while a set is in progress.
-void updateLcd() {
+// Line 1: current set number + status, driven by button A (start/stop) and
+// button B (reset) -- STOP before any set has ever started (setCount == 0),
+// RUNNING while active, RESTING between sets otherwise. Line 2: a matching
+// live-counting timer (RUN / READY / REST). Neither value is sent to the web
+// app, which tracks its own rep count (camera-driven) and set state
+// independently.
+void updateLcd(unsigned long now) {
+  unsigned long elapsedMs = setActive ? (now - setStartMs) : (now - restStartMs);
+  unsigned long totalSec = elapsedMs / 1000;
+  int mm = (int)((totalSec / 60) % 100); // clamp so it always fits mm:ss
+  int ss = (int)(totalSec % 60);
+
   char line1[LCD_COLS + 1];
   char line2[LCD_COLS + 1];
-  snprintf(line1, sizeof(line1), "REP:%d", repCount);
-  snprintf(line2, sizeof(line2), "V:%.2f HR:%d", velocity, beatAvg);
+  if (!setActive && setCount == 0) {
+    snprintf(line1, sizeof(line1), "PRESS GREEN");
+    snprintf(line2, sizeof(line2), "BUTTON TO START");
+  } else {
+    snprintf(line1, sizeof(line1), "SET:%d %s", setCount, setActive ? "RUNNING" : "RESTING");
+    snprintf(line2, sizeof(line2), "%s:%02d:%02d", "TIME", mm, ss);
+  }
 
   lcd.setCursor(0, 0);
   lcd.print(line1);
@@ -325,11 +375,43 @@ void loop() {
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;
 
+    // Temporary debug: count how many times this "100Hz" block actually runs
+    // per second, to see whether something (I2C, HTTP) is silently slowing it
+    // down well below the coded 10ms/100Hz target.
+    static int sampleRateCounter = 0;
+    static unsigned long lastSampleRatePrintMs = 0;
+    sampleRateCounter++;
+    if (now - lastSampleRatePrintMs >= 1000) {
+      Serial.printf("[RATE] actual fast-sample loop: %d Hz (target 100 Hz)\n", sampleRateCounter);
+      sampleRateCounter = 0;
+      lastSampleRatePrintMs = now;
+    }
+
     // Buttons: debounced press-edge detection; events latch until the next send.
-    pollButtonEdge(BUTTON_A_PIN, buttonALastLevel, buttonALastEdgeMs, buttonAEvent, now);
-    pollButtonEdge(BUTTON_B_PIN, buttonBLastLevel, buttonBLastEdgeMs, buttonBEvent, now);
+    bool buttonAJustPressed = pollButtonEdge(BUTTON_A_PIN, buttonALastLevel, buttonALastEdgeMs, buttonAEvent, now);
+    bool buttonBJustPressed = pollButtonEdge(BUTTON_B_PIN, buttonBLastLevel, buttonBLastEdgeMs, buttonBEvent, now);
     buttonAPressed = buttonALastLevel;
     buttonBPressed = buttonBLastLevel;
+
+    // Local LCD set timer, independent of the web app's own start/stop/save
+    // logic: A starts a fresh timer on the first press of a set and freezes
+    // it on the next (stop); B (stop + save session) resets everything so
+    // the LCD is ready for a brand-new session.
+    if (buttonAJustPressed) {
+      setActive = !setActive;
+      if (setActive) {
+        setStartMs = now;
+        setCount++;
+      } else {
+        restStartMs = now; // rest timer starts counting up from here
+      }
+    }
+    if (buttonBJustPressed) {
+      setActive = false;
+      restStartMs = now;
+      repCount = 0;
+      setCount = 0;
+    }
 
     // sEMG + FSR (raw ADC counts; server converts to µV / N, see telemetryStore.ts)
     int emgVal = analogRead(EMG_PIN);
@@ -351,27 +433,57 @@ void loop() {
       velocity = (velocity + netAccel * dt) * VELOCITY_DECAY;
     }
 
-    // MAX30102: heart rate (BPM) + rough SpO2 estimate
+    // MAX30102: heart rate (BPM) + rough SpO2 estimate.
+    //
+    // check() is a cheap, non-blocking poll of the sensor's FIFO (just reads
+    // two pointer registers if nothing new is ready). The old code called the
+    // library's getIR()/getRed() convenience wrappers instead, which each
+    // call safeCheck() internally -- a busy-wait loop that blocks for up to
+    // 250ms until a *new* sample lands in the FIFO. Calling both back-to-back
+    // meant waiting for two separate sensor sample cycles per loop iteration,
+    // which was stalling the whole 100Hz fast-sample loop down to ~15Hz and
+    // starving the beat-detection algorithm of the continuous sampling it
+    // needs to see the pulse waveform. Reading straight from the local FIFO
+    // buffer (getFIFOIR/getFIFORed + nextSample) is O(1) with no I2C wait.
     if (statusMax) {
-      long irValue = max30102.getIR();
-      long redValue = max30102.getRed();
+      max30102.check();
 
-      if (irValue > FINGER_PRESENT_IR_THRESHOLD) {
-        if (checkForBeat(irValue)) {
-          long delta = millis() - lastBeat;
-          lastBeat = millis();
-          float bpm = 60.0f / (delta / 1000.0f);
-          if (bpm > 20 && bpm < 255) {
-            bpmRates[bpmRateSpot++] = (byte)bpm;
-            bpmRateSpot %= RATE_SIZE;
-            long sum = 0;
-            for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
-            beatAvg = sum / RATE_SIZE;
-          }
+      while (max30102.available()) {
+        long irValue = max30102.getFIFOIR();
+        long redValue = max30102.getFIFORed();
+
+        static unsigned long lastIrDebugMs = 0;
+        if (now - lastIrDebugMs >= 500) {
+          lastIrDebugMs = now;
+          Serial.printf("[MAX30102] IR=%ld RED=%ld threshold=%ld finger=%s beatAvg=%d\n",
+            irValue, redValue, (long)FINGER_PRESENT_IR_THRESHOLD,
+            irValue > FINGER_PRESENT_IR_THRESHOLD ? "yes" : "no", beatAvg);
         }
-        updateSpo2Window(irValue, redValue);
-      } else {
-        beatAvg = 0; // no finger on sensor
+
+        if (irValue > FINGER_PRESENT_IR_THRESHOLD) {
+          if (checkForBeat(irValue)) {
+            long delta = millis() - lastBeat;
+            lastBeat = millis();
+            float bpm = 60.0f / (delta / 1000.0f);
+            // Physiologically plausible resting/exercising HR range -- 20-255 let
+            // obvious noise (e.g. a motion-artifact "beat" every 2s = 27 BPM)
+            // through and pollute the rolling average.
+            Serial.printf("[MAX30102] beat detected! delta=%ldms bpm=%.1f %s\n",
+              delta, bpm, (bpm > 40 && bpm < 220) ? "(accepted)" : "(rejected, out of 40-220 range)");
+            if (bpm > 40 && bpm < 220) {
+              bpmRates[bpmRateSpot++] = (byte)bpm;
+              bpmRateSpot %= RATE_SIZE;
+              long sum = 0;
+              for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
+              beatAvg = sum / RATE_SIZE;
+            }
+          }
+          updateSpo2Window(irValue, redValue);
+        } else {
+          beatAvg = 0; // no finger on sensor
+        }
+
+        max30102.nextSample();
       }
     }
   }
@@ -380,7 +492,7 @@ void loop() {
   // display keeps updating even if WiFi/the API is down. ----
   if (now - lastLcdMs >= LCD_UPDATE_INTERVAL_MS) {
     lastLcdMs = now;
-    updateLcd();
+    updateLcd(now);
   }
 
   // ---- Slow network send (10 Hz): batch every EMG sample collected since the
@@ -389,15 +501,21 @@ void loop() {
     lastSendMs = now;
 
     // MLX90614 changes slowly -- only worth reading once per network send.
-    float skinTemp = 0, deltaTemp = 0;
+    // `static` so a failed/NaN read (e.g. I2C hiccup) keeps the last good
+    // value instead of sending NaN, which is invalid JSON and would get the
+    // whole packet rejected by the server (see telemetryStore.ts).
+    static float skinTemp = 0, deltaTemp = 0;
     if (statusMlx) {
-      skinTemp = mlx.readObjectTempC();
-      deltaTemp = skinTemp - skinTempBaseline;
+      float t = mlx.readObjectTempC();
+      if (!isnan(t)) {
+        skinTemp = t;
+        deltaTemp = skinTemp - skinTempBaseline;
+      }
     }
 
     float fsrStability = computeFsrStability();
 
-    char emgArray[96];
+    char emgArray[192]; // fits EMG_BATCH_CAPACITY (~27 at 250ms/10ms) worst-case 4-digit values
     int pos = snprintf(emgArray, sizeof(emgArray), "[");
     for (int i = 0; i < emgBatchCount; i++) {
       pos += snprintf(emgArray + pos, sizeof(emgArray) - pos, "%s%d", i == 0 ? "" : ",", emgBatch[i]);
@@ -414,10 +532,6 @@ void loop() {
     buttonAEvent = false;
     buttonBEvent = false;
 
-    HTTPClient http;
-    http.begin(serverUrl);
-    http.addHeader("Content-Type", "application/json");
-
     char payload[640];
     snprintf(payload, sizeof(payload),
       "{\"board\":\"esp32\","
@@ -431,13 +545,15 @@ void loop() {
       beatAvg, spo2Estimate, skinTemp, deltaTemp,
       sentButtonA ? "true" : "false", sentButtonB ? "true" : "false");
 
+    unsigned long postStartMs = millis();
     int code = http.POST(payload);
+    unsigned long postDurationMs = millis() - postStartMs;
     if (code > 0) {
-      Serial.printf("Telemetry sent -> Code: %d (emg batch=%d)\n", code, sentBatchSize);
+      Serial.printf("Telemetry sent -> Code: %d (emg batch=%d) [POST took %lums]\n", code, sentBatchSize, postDurationMs);
+      if (code >= 400) Serial.printf("Payload was: %s\n", payload);
     } else {
-      Serial.printf("HTTP Error: %s\n", http.errorToString(code).c_str());
+      Serial.printf("HTTP Error: %s [POST took %lums]\n", http.errorToString(code).c_str(), postDurationMs);
     }
-    http.end();
   }
 
   delay(1); // yield to WiFi/background tasks
