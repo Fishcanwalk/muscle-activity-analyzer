@@ -52,6 +52,9 @@ pio run -d test-sensor -e esp32_mlx90614 -t upload -t monitor
 
 # วินิจฉัยทุกเซนเซอร์พร้อมกัน (All-in-one Diagnostic)
 pio run -d test-sensor -e esp32_all -t upload -t monitor
+
+# เฟิร์มแวร์หลัก: WiFi + 6 เซนเซอร์ + ปุ่ม 2 ปุ่ม + จอ LCD + บัซเซอร์ (esp32_workout_firmware.cpp)
+pio run -d test-sensor -e esp32_wifi_buttons -t upload -t monitor
 ```
 
 ---
