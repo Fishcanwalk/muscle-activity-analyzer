@@ -23,9 +23,12 @@
 #define BUZZER_PIN 25
 const int FSR_LOW_FORCE_THRESHOLD = 300;    // ADC counts (0-4095); below this = "losing grip"
 const int FSR_LOW_FORCE_HYSTERESIS = 50;    // must rise above threshold+this to clear the alert
+const float FSR_STABILITY_ALERT_THRESHOLD = 70.0f; // % from computeFsrStability(); below this = "not steady"
 const unsigned long BUZZER_BEEP_INTERVAL_MS = 150; // on/off toggle period while alerting
+const unsigned long BUZZER_ALERT_DELAY_MS = 3000;  // must stay flagged this long before it sounds
 bool buzzerOn = false;
 unsigned long buzzerLastToggleMs = 0;
+unsigned long fsrAlertConditionSinceMs = 0; // 0 = condition not currently met
 
 bool buttonAPressed = false;
 bool buttonBPressed = false;
@@ -305,10 +308,13 @@ float computeFsrStability() {
   return constrain(stability, 0.0f, 100.0f);
 }
 
-// Beeps in a non-blocking on/off pattern while a set is active AND the FSR
-// reading is below the low-force threshold -- hysteresis prevents chatter
-// right at the threshold, and gating on setActive keeps it quiet at rest
-// (idle hands read near-zero force, which isn't a "weak grip" event).
+// Beeps in a non-blocking on/off pattern while a set is active AND the grip is
+// either weak (FSR below the low-force threshold, with hysteresis to prevent
+// chatter right at the threshold) or unsteady (stability below
+// FSR_STABILITY_ALERT_THRESHOLD) -- gating on setActive keeps it quiet at
+// rest (idle hands read near-zero force, which isn't a "weak grip" event).
+// Either condition must hold continuously for BUZZER_ALERT_DELAY_MS before it
+// actually sounds, so a brief blip doesn't trigger it.
 void updateBuzzer(unsigned long now) {
   static bool lowForce = false;
   if (lowForce) {
@@ -317,7 +323,16 @@ void updateBuzzer(unsigned long now) {
     if (fsrLatest < FSR_LOW_FORCE_THRESHOLD) lowForce = true;
   }
 
-  bool shouldAlert = setActive && lowForce;
+  bool unsteady = computeFsrStability() < FSR_STABILITY_ALERT_THRESHOLD;
+  bool conditionMet = setActive && (lowForce || unsteady);
+
+  if (!conditionMet) {
+    fsrAlertConditionSinceMs = 0;
+  } else if (fsrAlertConditionSinceMs == 0) {
+    fsrAlertConditionSinceMs = now;
+  }
+
+  bool shouldAlert = conditionMet && fsrAlertConditionSinceMs != 0 && (now - fsrAlertConditionSinceMs) >= BUZZER_ALERT_DELAY_MS;
   if (!shouldAlert) {
     if (buzzerOn) {
       buzzerOn = false;
@@ -455,7 +470,9 @@ void loop() {
 
     // sEMG + FSR (raw ADC counts; server converts to µV / N, see telemetryStore.ts)
     int emgVal = analogRead(EMG_PIN);
-    fsrLatest = analogRead(FSR_PIN);
+    // FSR wiring reads high (near ADC_MAX_VAL) at rest and drops as force is
+    // applied; invert so higher ADC = more force, matching the physical sensor.
+    fsrLatest = ADC_MAX_VAL - analogRead(FSR_PIN);
     updateFsrStability(fsrLatest);
     updateBuzzer(now);
     if (emgBatchCount < EMG_BATCH_CAPACITY) emgBatch[emgBatchCount++] = emgVal;

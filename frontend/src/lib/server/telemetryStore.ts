@@ -40,7 +40,7 @@ export interface FullTelemetryPacket {
 		deltaTemp?: number;
 	};
 	// Discrete "was pressed since last send" flags from the ESP32 buttons (GPIO32/33),
-	// not held-down levels -- see esp32_connectToWifi_buttons.cpp.
+	// not held-down levels -- see esp32_workout_firmware.cpp.
 	buttons?: {
 		a?: boolean;
 		b?: boolean;

@@ -18,6 +18,18 @@
 #define BUTTON_B_PIN 33
 #define BUTTON_DEBOUNCE_MS 250 // ignores contact bounce / accidental double-taps
 
+// Buzzer: sounds while FSR force sits in the (100, 300) ADC-count band -- see
+// FSR_BUZZER_LOW_THRESHOLD/FSR_BUZZER_HIGH_THRESHOLD below.
+#define BUZZER_PIN 25
+const int FSR_BUZZER_LOW_THRESHOLD = 100;   // ADC counts (0-4095); below this = no alert
+const int FSR_BUZZER_HIGH_THRESHOLD = 300;  // ADC counts; at/above this = no alert
+const float FSR_STABILITY_ALERT_THRESHOLD = 70.0f; // % from computeFsrStability(); below this = "not steady"
+const unsigned long BUZZER_BEEP_INTERVAL_MS = 150; // on/off toggle period while alerting
+const unsigned long BUZZER_ALERT_DELAY_MS = 3000;  // must stay flagged this long before it sounds
+bool buzzerOn = false;
+unsigned long buzzerLastToggleMs = 0;
+unsigned long fsrAlertConditionSinceMs = 0; // 0 = condition not currently met
+
 bool buttonALastLevel = false;
 bool buttonBLastLevel = false;
 unsigned long buttonALastEdgeMs = 0;
@@ -138,6 +150,38 @@ float computeFsrStability() {
   return constrain(stability, 0.0f, 100.0f);
 }
 
+// Beeps in a non-blocking on/off pattern once the FSR reading has sat in the
+// "weak grip" band (FSR_BUZZER_LOW_THRESHOLD..FSR_BUZZER_HIGH_THRESHOLD) OR
+// the grip has been unsteady (stability below FSR_STABILITY_ALERT_THRESHOLD)
+// for at least BUZZER_ALERT_DELAY_MS -- clearing both conditions at any point
+// resets the wait so a brief blip doesn't trigger it.
+void updateBuzzer(unsigned long now) {
+  bool weakForce = fsrLatest > FSR_BUZZER_LOW_THRESHOLD && fsrLatest < FSR_BUZZER_HIGH_THRESHOLD;
+  bool unsteady = computeFsrStability() < FSR_STABILITY_ALERT_THRESHOLD;
+  bool conditionMet = weakForce || unsteady;
+
+  if (!conditionMet) {
+    fsrAlertConditionSinceMs = 0;
+  } else if (fsrAlertConditionSinceMs == 0) {
+    fsrAlertConditionSinceMs = now;
+  }
+
+  bool shouldAlert = conditionMet && fsrAlertConditionSinceMs != 0 && (now - fsrAlertConditionSinceMs) >= BUZZER_ALERT_DELAY_MS;
+  if (!shouldAlert) {
+    if (buzzerOn) {
+      buzzerOn = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+    return;
+  }
+
+  if (now - buzzerLastToggleMs >= BUZZER_BEEP_INTERVAL_MS) {
+    buzzerLastToggleMs = now;
+    buzzerOn = !buzzerOn;
+    digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
+  }
+}
+
 // Detects a HIGH->LOW (pressed) transition, ignoring further edges for
 // BUTTON_DEBOUNCE_MS to filter contact bounce. Prints immediately on a clean
 // press so button wiring can be verified without waiting for the summary line.
@@ -180,6 +224,8 @@ void setup() {
 
   pinMode(BUTTON_A_PIN, INPUT_PULLUP);
   pinMode(BUTTON_B_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
   Serial.println("\n========================================================");
   B_PRINTF("  Muscle Activity Analyzer - FULL SENSOR DEBUG (no WiFi/LCD)\n");
@@ -249,8 +295,11 @@ void loop() {
     pollButtonEdge("B", BUTTON_B_PIN, buttonBLastLevel, buttonBLastEdgeMs, now);
 
     emgLatest = analogRead(EMG_PIN);
-    fsrLatest = analogRead(FSR_PIN);
+    // FSR wiring reads high (near ADC_MAX_VAL) at rest and drops as force is
+    // applied; invert so higher ADC = more force, matching the physical sensor.
+    fsrLatest = ADC_MAX_VAL - analogRead(FSR_PIN);
     updateFsrStability(fsrLatest);
+    updateBuzzer(now);
 
     if (statusMpu) {
       mpuReadAccelMs2(mpuAx, mpuAy, mpuAz);

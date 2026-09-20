@@ -35,13 +35,15 @@
 
 `repCount`/LCD ไม่เกี่ยวกับสองปุ่มนี้ (ดูหัวข้อจอแสดงผลด้านล่าง) — รอบนี้ยังไม่ได้ทำช่องทางย้อนกลับให้ ESP32 ดึงค่า rep จริงจากเว็บมาโชว์
 
-## บัซเซอร์แจ้งเตือนแรงกำต่ำ (ของใหม่ — `esp32_connectToWifi_buttons.cpp`)
+## บัซเซอร์แจ้งเตือนแรงกำต่ำ/ไม่นิ่ง (ของใหม่ — `esp32_workout_firmware.cpp`)
 
 | สัญญาณ | GPIO | โหมด | หมายเหตุ |
 | :--- | :--- | :--- | :--- |
 | Buzzer | **GPIO 25** | Digital Output | ต่อขา + ของบัซเซอร์ (active buzzer) เข้า GPIO 25 อีกขาเข้า GND |
 
-พฤติกรรม: ระหว่างที่เซตกำลังทำงานอยู่ (`setActive == true`) ถ้าค่า FSR ต่ำกว่า 300 (ADC count, จาก 0-4095) บัซเซอร์จะส่งเสียงติด/ดับสลับกันทุก 150ms เพื่อเตือนว่าแรงกำอ่อนลง จนกว่าค่าจะขึ้นเกิน 350 (มี hysteresis 50 กันเสียงกระตุกที่รอยต่อ threshold) ไม่ส่งเสียงตอนพัก (`setActive == false`) เพราะตอนไม่ได้กำ ค่า FSR จะต่ำอยู่แล้วตามปกติ ไม่ใช่เหตุการณ์ "กำอ่อนลง"
+ค่า FSR ที่อ่านได้ (`fsrLatest`) ถูกกลับด้าน (`ADC_MAX_VAL - analogRead(FSR_PIN)`) ให้ค่ามาก = กำแรง, ค่าน้อย = กำเบา/ไม่ได้กำ (ตัวเซนเซอร์จริงอ่านค่าสูงตอนพักและลดลงเมื่อมีแรงกด)
+
+พฤติกรรม: ระหว่างที่เซตกำลังทำงานอยู่ (`setActive == true`) ถ้าค่า FSR ต่ำกว่า 300 (ADC count, จาก 0-4095, มี hysteresis 50 กันเสียงกระตุกที่รอยต่อ threshold) **หรือ** ค่าความนิ่ง (`computeFsrStability()`) ต่ำกว่า 70% (กำสั่น/ไม่สม่ำเสมอ) ต่อเนื่องอย่างน้อย 3 วินาที บัซเซอร์จะส่งเสียงติด/ดับสลับกันทุก 150ms เพื่อเตือน ไม่ส่งเสียงตอนพัก (`setActive == false`) เพราะตอนไม่ได้กำ ค่า FSR จะต่ำอยู่แล้วตามปกติ ไม่ใช่เหตุการณ์ "กำอ่อนลง"
 
 ## จอแสดงผล (LCD)
 
@@ -57,5 +59,5 @@ Library: `marcoschwartz/LiquidCrystal_I2C` (ประกาศไว้เฉพ
 
 ## ไฟล์ที่เกี่ยวข้อง
 
-- [`test-sensor/src/esp32_connectToWifi.cpp`](test-sensor/src/esp32_connectToWifi.cpp) — เฟิร์มแวร์หลัก (WiFi + 6 เซนเซอร์)
-- [`test-sensor/src/esp32_connectToWifi_buttons.cpp`](test-sensor/src/esp32_connectToWifi_buttons.cpp) — สำเนาของไฟล์ข้างบน + ปุ่ม 2 ปุ่ม + จอ LCD แสดง REP/Velocity/HR (ปุ่มยังไม่ผูก logic เพิ่ม/ลด REP รอกำหนดพฤติกรรมเพิ่มเติม)
+- [`test-sensor/src/esp32_workout_firmware.cpp`](test-sensor/src/esp32_workout_firmware.cpp) — เฟิร์มแวร์หลัก (WiFi + 6 เซนเซอร์ + ปุ่ม 2 ปุ่ม + จอ LCD แสดง REP/Velocity/HR + บัซเซอร์แจ้งเตือนแรงกำต่ำ/ไม่นิ่ง; ปุ่มยังไม่ผูก logic เพิ่ม/ลด REP รอกำหนดพฤติกรรมเพิ่มเติม)
+- [`test-sensor/src/esp32_connectToWifi.cpp`](test-sensor/src/esp32_connectToWifi.cpp) — เฟิร์มแวร์รุ่นก่อนหน้า ไม่มีปุ่ม/จอ LCD/บัซเซอร์ (WiFi + 6 เซนเซอร์)
