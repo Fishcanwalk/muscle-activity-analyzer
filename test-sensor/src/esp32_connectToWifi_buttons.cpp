@@ -17,6 +17,16 @@
 #define BUTTON_B_PIN 33
 #define BUTTON_DEBOUNCE_MS 250 // ignores contact bounce / accidental double-taps
 
+// Buzzer: warns when grip force (FSR) drops too low during an active set.
+// GPIO 25 is free (not I2C/ADC1/button), and works as a plain digital output
+// regardless of WiFi (the ADC2-vs-WiFi conflict only affects analogRead).
+#define BUZZER_PIN 25
+const int FSR_LOW_FORCE_THRESHOLD = 300;    // ADC counts (0-4095); below this = "losing grip"
+const int FSR_LOW_FORCE_HYSTERESIS = 50;    // must rise above threshold+this to clear the alert
+const unsigned long BUZZER_BEEP_INTERVAL_MS = 150; // on/off toggle period while alerting
+bool buzzerOn = false;
+unsigned long buzzerLastToggleMs = 0;
+
 bool buttonAPressed = false;
 bool buttonBPressed = false;
 bool buttonALastLevel = false; // debounced level from the previous fast-sample tick
@@ -207,6 +217,8 @@ void setup() {
 
   pinMode(BUTTON_A_PIN, INPUT_PULLUP);
   pinMode(BUTTON_B_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
   setupBoardAdc();
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -291,6 +303,34 @@ float computeFsrStability() {
   float range = hi - lo;
   float stability = 100.0f - (range / 200.0f) * 100.0f;
   return constrain(stability, 0.0f, 100.0f);
+}
+
+// Beeps in a non-blocking on/off pattern while a set is active AND the FSR
+// reading is below the low-force threshold -- hysteresis prevents chatter
+// right at the threshold, and gating on setActive keeps it quiet at rest
+// (idle hands read near-zero force, which isn't a "weak grip" event).
+void updateBuzzer(unsigned long now) {
+  static bool lowForce = false;
+  if (lowForce) {
+    if (fsrLatest > FSR_LOW_FORCE_THRESHOLD + FSR_LOW_FORCE_HYSTERESIS) lowForce = false;
+  } else {
+    if (fsrLatest < FSR_LOW_FORCE_THRESHOLD) lowForce = true;
+  }
+
+  bool shouldAlert = setActive && lowForce;
+  if (!shouldAlert) {
+    if (buzzerOn) {
+      buzzerOn = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+    return;
+  }
+
+  if (now - buzzerLastToggleMs >= BUZZER_BEEP_INTERVAL_MS) {
+    buzzerLastToggleMs = now;
+    buzzerOn = !buzzerOn;
+    digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
+  }
 }
 
 // Detects a HIGH->LOW (pressed) transition, ignoring further edges for
@@ -417,6 +457,7 @@ void loop() {
     int emgVal = analogRead(EMG_PIN);
     fsrLatest = analogRead(FSR_PIN);
     updateFsrStability(fsrLatest);
+    updateBuzzer(now);
     if (emgBatchCount < EMG_BATCH_CAPACITY) emgBatch[emgBatchCount++] = emgVal;
 
     // MPU-6050/6500: pitch/roll + leaky-integrated concentric velocity
