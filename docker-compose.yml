@@ -1,0 +1,71 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: cyberpump-mongo
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - cyberpump-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cyberpump-backend
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/cyberpump}
+      JWT_SECRET: ${JWT_SECRET:-cyberpump-super-secret-jwt-key-change-in-prod}
+      ACCESS_TTL_S: ${ACCESS_TTL_S:-600}
+      REFRESH_TTL_S: ${REFRESH_TTL_S:-604800}
+      TELEMETRY_SERVICE_TOKEN: ${TELEMETRY_SERVICE_TOKEN:-cyberpump-telemetry-token}
+      TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS:-90}
+    depends_on:
+      - mongo
+    networks:
+      - cyberpump-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cyberpump-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: ./frontend/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      PUBLIC_APP_TITLE: ${PUBLIC_APP_TITLE:-Cyberpump}
+      BACKEND_API_URL: ${BACKEND_API_URL:-http://backend:9000}
+      TELEMETRY_SERVICE_TOKEN: ${TELEMETRY_SERVICE_TOKEN:-cyberpump-telemetry-token}
+      ORIGIN: ${ORIGIN:-http://localhost:3000}
+    depends_on:
+      - backend
+    networks:
+      - cyberpump-net
+
+volumes:
+  mongo_data:
+    name: cyberpump_mongo_data
+
+networks:
+  cyberpump-net:
+    name: cyberpump_network
+    driver: bridge
+

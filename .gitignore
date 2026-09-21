@@ -9,6 +9,18 @@ backend/.venv/
 backend/.env
 !backend/.env.example
 
+# Frontend / Node
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+frontend/.env
+!frontend/.env.example
+.pnpm-store/
+
+# Root Environment
+.env
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
