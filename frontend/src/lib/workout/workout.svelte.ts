@@ -25,7 +25,20 @@ export interface SetSummary {
 	highTensionTutSeconds: number;
 	reps: RepRecord[];
 	timestamp: string;
+	sessionId: string | null;
 }
+
+export interface SessionSummary {
+	sessionId: string;
+	totalSets: number;
+	exercises: string[];
+	totalReps: number;
+	cleanReps: number;
+	totalVolumeKg: number;
+	avgFormPurityPercent: number;
+}
+
+const SESSION_ID_STORAGE_KEY = 'workout.sessionId';
 
 class WorkoutManager {
 	activeTab = $state<'readiness' | 'studio' | 'postset' | 'analytics' | 'calibration'>('studio');
@@ -47,10 +60,39 @@ class WorkoutManager {
 	repsInSet = $state<RepRecord[]>([]);
 	lastCompletedSet = $state<SetSummary | null>(null);
 
+	sessionId = $state<string | null>(null);
+	setsInSession = $state<SetSummary[]>([]);
+
 	private timerInterval: any = null;
+
+	constructor() {
+		if (typeof window !== 'undefined') {
+			const stored = sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+			if (stored) this.sessionId = stored;
+		}
+	}
+
+	private postRecordingAction(action: 'start' | 'stop') {
+		if (typeof window === 'undefined') return;
+		fetch('/api/recording', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action, sessionId: this.sessionId })
+		}).catch((err) => {
+			console.warn(`[Workout] Failed to ${action} recording`, err);
+		});
+	}
 
 	startSet() {
 		if (this.timerInterval) clearInterval(this.timerInterval);
+
+		if (!this.sessionId) {
+			this.sessionId = crypto.randomUUID();
+			if (typeof window !== 'undefined') {
+				sessionStorage.setItem(SESSION_ID_STORAGE_KEY, this.sessionId);
+			}
+		}
+
 		this.isSetRunning = true;
 		this.setDurationSeconds = 0;
 		this.totalReps = 0;
@@ -68,6 +110,8 @@ class WorkoutManager {
 				this.setDurationSeconds += 1;
 			}
 		}, 1000);
+
+		this.postRecordingAction('start');
 	}
 
 	stopSet() {
@@ -75,7 +119,7 @@ class WorkoutManager {
 			clearInterval(this.timerInterval);
 			this.timerInterval = null;
 		}
-		this.lastCompletedSet = {
+		const completedSet: SetSummary = {
 			setNumber: this.currentSet,
 			exercise: this.exercise,
 			weightKg: this.weightKg,
@@ -87,11 +131,44 @@ class WorkoutManager {
 			effectiveReps: this.effectiveReps,
 			highTensionTutSeconds: this.highTensionTutSeconds,
 			reps: [...this.repsInSet],
-			timestamp: new Date().toLocaleTimeString()
+			timestamp: new Date().toLocaleTimeString(),
+			sessionId: this.sessionId
 		};
+		this.lastCompletedSet = completedSet;
+		this.setsInSession = [...this.setsInSession, completedSet];
 		this.isSetRunning = false;
 		this.fsmState = 'IDLE';
 		this.activeCheatWarnings = [];
+
+		this.postRecordingAction('stop');
+	}
+
+	// Aggregates every set completed since the last endWorkout() (or app start) into
+	// a single session-level summary, then clears session state (sessionId,
+	// sessionStorage, setsInSession) so the next startSet() begins a fresh workout.
+	endWorkout(): SessionSummary {
+		const sets = this.setsInSession;
+		const sessionId = this.sessionId;
+
+		const summary: SessionSummary = {
+			sessionId: sessionId ?? '',
+			totalSets: sets.length,
+			exercises: [...new Set(sets.map((s) => s.exercise))],
+			totalReps: sets.reduce((sum, s) => sum + s.totalReps, 0),
+			cleanReps: sets.reduce((sum, s) => sum + s.cleanReps, 0),
+			totalVolumeKg: sets.reduce((sum, s) => sum + s.weightKg * s.cleanReps, 0),
+			avgFormPurityPercent: sets.length
+				? Math.round(sets.reduce((sum, s) => sum + s.formPurityPercent, 0) / sets.length)
+				: 0
+		};
+
+		this.sessionId = null;
+		if (typeof window !== 'undefined') {
+			sessionStorage.removeItem(SESSION_ID_STORAGE_KEY);
+		}
+		this.setsInSession = [];
+
+		return summary;
 	}
 
 	nextSet() {
@@ -154,22 +231,27 @@ class WorkoutManager {
 			cleanVolume: summary.weightKg * summary.cleanReps
 		});
 
-		const { error } = await fastapiClient.POST('/v1/sessions', {
-			body: {
-				setNumber: summary.setNumber,
-				exercise: summary.exercise,
-				weightKg: summary.weightKg,
-				durationSeconds: summary.durationSeconds,
-				totalReps: summary.totalReps,
-				cleanReps: summary.cleanReps,
-				cheatedReps: summary.cheatedReps,
-				formPurityPercent: summary.formPurityPercent,
-				effectiveReps: summary.effectiveReps,
-				highTensionTutSeconds: summary.highTensionTutSeconds,
-				reps: summary.reps,
-				timestamp: summary.timestamp
-			}
-		});
+		// Built as a standalone variable (not an inline literal) so extra fields like
+		// session_id -- present on the backend model but not yet reflected in the
+		// generated OpenAPI types until the client is regenerated -- don't trip
+		// TypeScript's excess-property check on object literals.
+		const body = {
+			setNumber: summary.setNumber,
+			exercise: summary.exercise,
+			weightKg: summary.weightKg,
+			durationSeconds: summary.durationSeconds,
+			totalReps: summary.totalReps,
+			cleanReps: summary.cleanReps,
+			cheatedReps: summary.cheatedReps,
+			formPurityPercent: summary.formPurityPercent,
+			effectiveReps: summary.effectiveReps,
+			highTensionTutSeconds: summary.highTensionTutSeconds,
+			reps: summary.reps,
+			timestamp: summary.timestamp,
+			session_id: summary.sessionId
+		};
+
+		const { error } = await fastapiClient.POST('/v1/sessions', { body });
 
 		if (error) {
 			toast.error('บันทึกผลเซสชันไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');

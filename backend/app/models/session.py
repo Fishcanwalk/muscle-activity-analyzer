@@ -26,6 +26,7 @@ class SessionResultCreate(BaseModel):
     highTensionTutSeconds: float
     reps: list[RepResult] = Field(default_factory=list)
     timestamp: str | None = None
+    session_id: str | None = None
 
 
 class SessionResult(SessionResultCreate):
@@ -51,4 +52,5 @@ def session_doc_to_model(doc: dict) -> SessionResult:
         highTensionTutSeconds=doc["highTensionTutSeconds"],
         reps=doc.get("reps", []),
         timestamp=doc.get("timestamp"),
+        session_id=doc.get("session_id"),
     )

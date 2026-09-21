@@ -5,4 +5,4 @@
 	let { data }: PageProps = $props();
 </script>
 
-<WorkoutDashboard />
+<WorkoutDashboard user={data.user} />

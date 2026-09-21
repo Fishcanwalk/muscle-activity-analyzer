@@ -68,6 +68,22 @@ const HIGH_TENSION_UV_THRESHOLD = 280;
 // Assumed full-scale grip force (Newtons) at max ADC reading; calibrate via fsrMax.
 const FSR_MAX_N = 50;
 
+// Single shared hardware rig, one active recording at a time (see plan's Accepted
+// Tradeoffs). Not a per-user map -- starting a recording for a different user while
+// one is active is rejected rather than queued.
+export interface RecordingSlot {
+	userId: string;
+	sessionId: string;
+	startedAt: number;
+}
+
+export type StartRecordingResult = { ok: true } | { ok: false; reason: 'conflict' };
+
+// Crash/close safety net: a hard duration cap checked inline on every ingest, rather
+// than tying recording-stop to SSE stream disconnect (which also fires on page
+// refresh, and would wrongly kill recording on every reload).
+const MAX_RECORDING_DURATION_MS = 10 * 60 * 1000;
+
 // `baseline` is the calibrated rest-state µV reading (state.calibration.emgBaseline);
 // it defaults to 0 so an uncalibrated system reproduces the old, unadjusted conversion.
 function adcToEmgUv(rawAdc: number, baseline = 0): number {
@@ -93,6 +109,7 @@ class ServerTelemetryState {
 	private packetsPerSec = 0;
 	private secondCounter = 0;
 	private lastRateCalc = Date.now();
+	private recording: RecordingSlot | null = null;
 
 	state = {
 		emg: {
@@ -295,6 +312,14 @@ class ServerTelemetryState {
 		this.forwardToBackend();
 	}
 
+	// NOTE: the backend `/v1/calibration` collection (per-user) is now the source of
+	// truth for calibration values -- see src/routes/api/calibration/+server.ts, which
+	// proxies GET/POST through `event.locals.fastapiClient`. This in-memory copy is no
+	// longer directly writable from an unauthenticated caller; it's kept only as a live
+	// cache so the always-on ADC->µV/N conversion above (ingestEmg/ingestFullTelemetry)
+	// and the SSE `state` snapshot stay in sync with whatever the calibration route last
+	// read/wrote for the current single-rig user. The calibration route calls this after
+	// every successful backend GET/POST to refresh the cache.
 	setCalibration(cal: {
 		emgBaseline?: number;
 		emgMvc?: number;
@@ -306,6 +331,40 @@ class ServerTelemetryState {
 		if (cal.fsrZero !== undefined) this.state.calibration.fsrZero = cal.fsrZero;
 		if (cal.fsrMax !== undefined) this.state.calibration.fsrMax = cal.fsrMax;
 		this.broadcast('calibration', this.state.calibration);
+	}
+
+	// Idempotent restart: re-issuing `start` for the same user just refreshes startedAt.
+	// Rejects (409 at the route level) only when a *different* user's recording is active.
+	startRecording(userId: string, sessionId: string): StartRecordingResult {
+		this.expireStaleRecording();
+		if (this.recording && this.recording.userId !== userId) {
+			return { ok: false, reason: 'conflict' };
+		}
+		this.recording = { userId, sessionId, startedAt: Date.now() };
+		return { ok: true };
+	}
+
+	// No-op if the slot is already clear or owned by someone else.
+	stopRecording(userId: string): void {
+		if (this.recording && this.recording.userId === userId) {
+			this.recording = null;
+		}
+	}
+
+	private expireStaleRecording() {
+		if (this.recording && Date.now() - this.recording.startedAt > MAX_RECORDING_DURATION_MS) {
+			logger.warn(
+				{ recording: this.recording },
+				'[Telemetry] Recording exceeded MAX_RECORDING_DURATION_MS, auto-clearing'
+			);
+			this.recording = null;
+		}
+	}
+
+	// Checked inline on every ingest before deciding whether to forward to the backend.
+	private activeRecording(): RecordingSlot | null {
+		this.expireStaleRecording();
+		return this.recording;
 	}
 
 	private recordPacket(board: string) {
@@ -340,7 +399,13 @@ class ServerTelemetryState {
 		this.emitter.emit(event, payload);
 	}
 
+	// Gated on "recording is currently active" -- this is the only place DB persistence
+	// is cut off. `broadcast()` and the `state` mutation above always run regardless, so
+	// the live SSE view to the browser stays always-on independent of recording state.
 	private forwardToBackend() {
+		const recording = this.activeRecording();
+		if (!recording) return;
+
 		const backendUrl = env.BACKEND_API_URL;
 		const serviceToken = env.TELEMETRY_SERVICE_TOKEN;
 		if (!backendUrl || !serviceToken) return;
@@ -357,7 +422,9 @@ class ServerTelemetryState {
 				mpu: this.state.mpu,
 				vitals: this.state.vitals,
 				device: this.state.device,
-				timestamp: Date.now()
+				timestamp: Date.now(),
+				user_id: recording.userId,
+				session_id: recording.sessionId
 			})
 		}).catch((err) => {
 			logger.warn({ err }, '[Telemetry] Failed to forward packet to backend');

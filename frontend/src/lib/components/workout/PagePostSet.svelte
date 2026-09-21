@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { workout } from '$lib/workout/workout.svelte';
+	import { workout, type SessionSummary } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec } from '$lib/utils/format';
-	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle } from 'lucide-svelte';
+	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle, Flag } from 'lucide-svelte';
 
 	interface Props {
 		onStartNextSet: () => void;
@@ -128,7 +128,8 @@
 					peakEmg: 490
 				}
 			],
-			timestamp: '18:32:10'
+			timestamp: '18:32:10',
+			sessionId: null
 		}
 	);
 
@@ -153,6 +154,21 @@
 		isSaving = true;
 		await workout.saveSummary(currentSummary);
 		isSaving = false;
+		onFinishSession();
+	}
+
+	// "จบการออกกำลังกาย" is a separate, additive action from saving a single set
+	// above -- it aggregates every set completed this workout (workout.endWorkout())
+	// and renders the result in place, rather than immediately switching tabs, so
+	// the lifter sees the session-wide numbers before moving on.
+	let sessionSummary = $state<SessionSummary | null>(null);
+
+	function handleEndWorkout() {
+		sessionSummary = workout.endWorkout();
+	}
+
+	function handleCloseSummary() {
+		sessionSummary = null;
 		onFinishSession();
 	}
 </script>
@@ -192,8 +208,72 @@
 				<Save class="h-4 w-4" />
 				<span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกผลเซสชันวันนี้'}</span>
 			</button>
+			<button
+				onclick={handleEndWorkout}
+				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-400 hover:bg-rose-500/20"
+			>
+				<Flag class="h-4 w-4" />
+				<span>จบการออกกำลังกาย</span>
+			</button>
 		</div>
 	</div>
+
+	{#if sessionSummary}
+		<!-- Whole-workout aggregate: every set completed since the sessionId was
+		     generated (first startSet()), across possibly multiple exercises. -->
+		<div
+			class="flex flex-col gap-4 rounded-xl border border-emerald-500/30 bg-linear-to-r from-emerald-500/10 via-card to-cyan-500/5 p-6 shadow-xl"
+		>
+			<div>
+				<span class="flex items-center gap-2 text-xs font-bold tracking-wider text-emerald-400 uppercase">
+					<Flag class="h-4 w-4" /> Session Summary
+				</span>
+				<h3 class="mt-1 text-lg font-bold text-foreground">🏁 สรุปผลการออกกำลังกายวันนี้</h3>
+			</div>
+
+			<div class="grid grid-cols-2 gap-3 md:grid-cols-3">
+				<div class="rounded-lg border border-border bg-background/50 p-3">
+					<span class="text-xs text-muted-foreground">จำนวนเซตทั้งหมด</span>
+					<div class="text-xl font-black text-foreground">{sessionSummary.totalSets}</div>
+				</div>
+
+				<div class="rounded-lg border border-border bg-background/50 p-3">
+					<span class="text-xs text-muted-foreground">ท่าออกกำลังกาย</span>
+					<div class="text-sm font-bold text-foreground">
+						{sessionSummary.exercises.length ? sessionSummary.exercises.join(', ') : '-'}
+					</div>
+				</div>
+
+				<div class="rounded-lg border border-border bg-background/50 p-3">
+					<span class="text-xs text-muted-foreground">Total / Clean Reps</span>
+					<div class="text-xl font-black text-foreground">
+						{sessionSummary.totalReps}
+						<span class="text-xs font-normal text-muted-foreground">/ {sessionSummary.cleanReps} Clean</span>
+					</div>
+				</div>
+
+				<div class="rounded-lg border border-border bg-background/50 p-3">
+					<span class="text-xs text-muted-foreground">ปริมาณงานรวม (Volume)</span>
+					<div class="text-xl font-black text-emerald-400">
+						{sessionSummary.totalVolumeKg.toFixed(1)} <span class="text-xs font-normal text-muted-foreground">kg</span>
+					</div>
+				</div>
+
+				<div class="rounded-lg border border-border bg-background/50 p-3">
+					<span class="text-xs text-muted-foreground">Form Purity เฉลี่ย</span>
+					<div class="text-xl font-black text-cyan-400">{sessionSummary.avgFormPurityPercent}%</div>
+				</div>
+			</div>
+
+			<button
+				onclick={handleCloseSummary}
+				class="flex w-fit items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400"
+			>
+				<span>เสร็จสิ้น</span>
+				<ArrowRight class="h-4 w-4" />
+			</button>
+		</div>
+	{/if}
 
 	<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
 		<!-- Left: Stimulus Scorecard & Audit -->
@@ -300,7 +380,7 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-border">
-							{#each currentSummary.reps as r}
+							{#each currentSummary.reps as r (r.repNumber)}
 								<tr class={r.isClean ? '' : 'bg-destructive/10'}>
 									<td class="py-2 font-bold">#{r.repNumber}</td>
 									<td>{r.concentricVelocity} m/s</td>

@@ -142,6 +142,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Calibration */
+        get: operations["get_calibration_v1_calibration_get"];
+        put?: never;
+        /** Upsert Calibration */
+        post: operations["upsert_calibration_v1_calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -163,6 +181,35 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Calibration */
+        Calibration: {
+            /** Emgbaseline */
+            emgBaseline: number;
+            /** Emgmvc */
+            emgMvc: number;
+            /** Fsrzero */
+            fsrZero: number;
+            /** Fsrmax */
+            fsrMax: number;
+            /** User Id */
+            user_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CalibrationCreate */
+        CalibrationCreate: {
+            /** Emgbaseline */
+            emgBaseline: number;
+            /** Emgmvc */
+            emgMvc: number;
+            /** Fsrzero */
+            fsrZero: number;
+            /** Fsrmax */
+            fsrMax: number;
+        };
         /** DeviceState */
         DeviceState: {
             /** Board */
@@ -273,6 +320,8 @@ export interface components {
             reps?: components["schemas"]["RepResult"][];
             /** Timestamp */
             timestamp?: string | null;
+            /** Session Id */
+            session_id?: string | null;
             /** Id */
             id: string;
             /** User Id */
@@ -309,6 +358,8 @@ export interface components {
             reps?: components["schemas"]["RepResult"][];
             /** Timestamp */
             timestamp?: string | null;
+            /** Session Id */
+            session_id?: string | null;
         };
         /** TelemetryIngest */
         TelemetryIngest: {
@@ -319,6 +370,10 @@ export interface components {
             device?: components["schemas"]["DeviceState"] | null;
             /** Timestamp */
             timestamp?: number | null;
+            /** User Id */
+            user_id?: string | null;
+            /** Session Id */
+            session_id?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -640,6 +695,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                session_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -687,6 +743,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_calibration_v1_calibration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Calibration"];
+                };
+            };
+        };
+    };
+    upsert_calibration_v1_calibration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Calibration"];
                 };
             };
             /** @description Validation Error */

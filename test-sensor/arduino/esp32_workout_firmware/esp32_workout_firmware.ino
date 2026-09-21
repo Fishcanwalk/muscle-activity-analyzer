@@ -200,6 +200,23 @@ unsigned long lastSendMs = 0;
 const unsigned long LCD_UPDATE_INTERVAL_MS = 200; // 5 Hz -- plenty for a human-readable display
 unsigned long lastLcdMs = 0;
 
+// MLX90614 changes slowly, so it doesn't need fast-sample-rate polling, but it
+// must NOT be gated on the network-send block below (which only runs while
+// WiFi is connected) -- otherwise skinTemp/deltaTemp simply never update (stay
+// at their 0.0f default) whenever WiFi is down/not yet connected.
+const unsigned long MLX_READ_INTERVAL_MS = 250;
+unsigned long lastMlxReadMs = 0;
+
+// All sensor values are logged together in one line at this rate, instead of
+// each sensor printing its own debug line on its own schedule -- keeps the
+// serial monitor readable without needing to print at the 100Hz sample rate.
+const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000; // 1 Hz
+unsigned long lastDebugPrintMs = 0;
+
+// MLX90614 skin temp, kept global (not scoped to the network-send block) so
+// the debug print above can show the last known reading too.
+float skinTemp = 0.0f, deltaTemp = 0.0f;
+
 // MPU-6050: pitch/roll + concentric velocity via leaky-integrated vertical
 // acceleration, updated every fast sample for accurate dt. This is a simplified
 // VBT estimate (no zero-velocity-update / Kalman filter), good enough for
@@ -476,17 +493,12 @@ void loop() {
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;
 
-    // Temporary debug: count how many times this "100Hz" block actually runs
-    // per second, to see whether something (I2C, HTTP) is silently slowing it
-    // down well below the coded 10ms/100Hz target.
+    // Counts how many times this "100Hz" block actually runs per second, to
+    // see whether something (I2C, HTTP) is silently slowing it down well
+    // below the coded 10ms/100Hz target. Reported in the consolidated
+    // [SENSORS] print below.
     static int sampleRateCounter = 0;
-    static unsigned long lastSampleRatePrintMs = 0;
     sampleRateCounter++;
-    if (now - lastSampleRatePrintMs >= 1000) {
-      Serial.printf("[RATE] actual fast-sample loop: %d Hz (target 100 Hz)\n", sampleRateCounter);
-      sampleRateCounter = 0;
-      lastSampleRatePrintMs = now;
-    }
 
     // Buttons: debounced press-edge detection; events latch until the next send.
     bool buttonAJustPressed = pollButtonEdge(BUTTON_A_PIN, buttonALastLevel, buttonALastEdgeMs, buttonAEvent, now);
@@ -523,12 +535,6 @@ void loop() {
     updateBuzzer(now);
     if (emgBatchCount < EMG_BATCH_CAPACITY) emgBatch[emgBatchCount++] = emgVal;
 
-    static unsigned long lastFsrDebugMs = 0;
-    if (now - lastFsrDebugMs >= 500) {
-      lastFsrDebugMs = now;
-      Serial.printf("[EMG] raw=%d | [FSR] raw=%d stability=%.1f%%\n", emgVal, fsrLatest, computeFsrStability());
-    }
-
     // MPU-6050/6500: pitch/roll + leaky-integrated concentric velocity
     if (statusMpu) {
       mpuReadAccelMs2(mpuAx, mpuAy, mpuAz);
@@ -555,20 +561,15 @@ void loop() {
     // starving the beat-detection algorithm of the continuous sampling it
     // needs to see the pulse waveform. Reading straight from the local FIFO
     // buffer (getFIFOIR/getFIFORed + nextSample) is O(1) with no I2C wait.
+    long lastIrValue = 0, lastRedValue = 0;
     if (statusMax) {
       max30102.check();
 
       while (max30102.available()) {
         long irValue = max30102.getFIFOIR();
         long redValue = max30102.getFIFORed();
-
-        static unsigned long lastIrDebugMs = 0;
-        if (now - lastIrDebugMs >= 500) {
-          lastIrDebugMs = now;
-          Serial.printf("[MAX30102] IR=%ld RED=%ld threshold=%ld finger=%s beatAvg=%d\n",
-            irValue, redValue, (long)FINGER_PRESENT_IR_THRESHOLD,
-            irValue > FINGER_PRESENT_IR_THRESHOLD ? "yes" : "no", beatAvg);
-        }
+        lastIrValue = irValue;
+        lastRedValue = redValue;
 
         if (irValue > FINGER_PRESENT_IR_THRESHOLD) {
           if (checkForBeat(irValue)) {
@@ -596,6 +597,21 @@ void loop() {
         max30102.nextSample();
       }
     }
+
+    // ---- Consolidated sensor debug print (1 Hz): all sensor values on one
+    // line instead of each sensor printing on its own schedule. ----
+    if (now - lastDebugPrintMs >= DEBUG_PRINT_INTERVAL_MS) {
+      lastDebugPrintMs = now;
+      Serial.printf(
+        "[SENSORS] loop=%dHz | EMG=%d | FSR=%d stability=%.1f%% | "
+        "MPU pitch=%.1f roll=%.1f vel=%.2f | HR=%d SpO2=%.1f%% | "
+        "skinTemp=%.1fC dTemp=%.1fC | IR=%ld RED=%ld finger=%s\n",
+        sampleRateCounter, emgVal, fsrLatest, computeFsrStability(),
+        mpuPitch, mpuRoll, velocity, beatAvg, spo2Estimate,
+        skinTemp, deltaTemp, lastIrValue, lastRedValue,
+        lastIrValue > FINGER_PRESENT_IR_THRESHOLD ? "yes" : "no");
+      sampleRateCounter = 0;
+    }
   }
 
   // ---- LCD refresh (5 Hz): independent of the network send rate so the
@@ -605,23 +621,30 @@ void loop() {
     updateLcd(now);
   }
 
+  // ---- MLX90614 read (4 Hz): independent of WiFi/network-send state -- see
+  // MLX_READ_INTERVAL_MS comment above. skinTemp/deltaTemp are globals so a
+  // failed/NaN read (e.g. I2C hiccup) keeps the last good value instead of
+  // resetting to 0/NaN; the [SENSORS] debug print and telemetry payload below
+  // both just read whatever this last stored.
+  if (statusMlx && now - lastMlxReadMs >= MLX_READ_INTERVAL_MS) {
+    lastMlxReadMs = now;
+    float t = mlx.readObjectTempC();
+    if (!isnan(t)) {
+      skinTemp = t;
+      deltaTemp = skinTemp - skinTempBaseline;
+    } else {
+      static unsigned long lastMlxFailPrintMs = 0;
+      if (now - lastMlxFailPrintMs >= 1000) {
+        lastMlxFailPrintMs = now;
+        Serial.println("[MLX90614] read failed (NaN) -- check wiring/pull-ups, not I2C clock (already 100kHz)");
+      }
+    }
+  }
+
   // ---- Slow network send (10 Hz): batch every EMG sample collected since the
   // last send so no signal is lost even though we POST less often. ----
   if (WiFi.status() == WL_CONNECTED && now - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = now;
-
-    // MLX90614 changes slowly -- only worth reading once per network send.
-    // `static` so a failed/NaN read (e.g. I2C hiccup) keeps the last good
-    // value instead of sending NaN, which is invalid JSON and would get the
-    // whole packet rejected by the server (see telemetryStore.ts).
-    static float skinTemp = 0, deltaTemp = 0;
-    if (statusMlx) {
-      float t = mlx.readObjectTempC();
-      if (!isnan(t)) {
-        skinTemp = t;
-        deltaTemp = skinTemp - skinTempBaseline;
-      }
-    }
 
     float fsrStability = computeFsrStability();
 

@@ -16,7 +16,12 @@ class TelemetryManager {
 		concentricVelocity: 0.0,
 		rep1Velocity: 0.0,
 		velocityLossPercent: 0,
-		isEffectiveZone: false
+		isEffectiveZone: false,
+		pitch: 0.0,
+		roll: 0.0,
+		ax: 0.0,
+		ay: 0.0,
+		az: 0.0
 	});
 
 	fsr = $state({
@@ -151,6 +156,11 @@ class TelemetryManager {
 								this.mpu.isEffectiveZone =
 									this.mpu.velocityLossPercent >= 25 && this.mpu.velocityLossPercent <= 45;
 							}
+							if (data.mpu.pitch !== undefined) this.mpu.pitch = round3(data.mpu.pitch);
+							if (data.mpu.roll !== undefined) this.mpu.roll = round3(data.mpu.roll);
+							if (data.mpu.ax !== undefined) this.mpu.ax = round3(data.mpu.ax);
+							if (data.mpu.ay !== undefined) this.mpu.ay = round3(data.mpu.ay);
+							if (data.mpu.az !== undefined) this.mpu.az = round3(data.mpu.az);
 						}
 
 						if (data.vitals) {

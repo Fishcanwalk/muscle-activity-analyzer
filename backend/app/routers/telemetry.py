@@ -33,9 +33,9 @@ async def get_telemetry_history(
     since: int | None = Query(default=None),
     limit: int = Query(default=500, le=2000, gt=0),
     db: AsyncIOMotorDatabase = Depends(get_database),
-    _current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ) -> list[dict]:
-    query: dict = {}
+    query: dict = {"user_id": str(current_user["_id"])}
     if since is not None:
         since_dt = datetime.fromtimestamp(since / 1000, tz=timezone.utc)
         query["received_at"] = {"$gte": since_dt}

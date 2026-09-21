@@ -6,10 +6,20 @@
 	import PageAnalytics from './PageAnalytics.svelte';
 	import PageCalibration from './PageCalibration.svelte';
 	import { workout } from '$lib/workout/workout.svelte';
+
+	interface Props {
+		user: { name?: string; email: string; avatar?: string | null; [key: string]: unknown };
+	}
+
+	let { user }: Props = $props();
 </script>
 
 <div class="flex min-h-screen flex-col bg-background text-foreground">
-	<WorkoutHeader activeTab={workout.activeTab} onTabChange={(tab) => (workout.activeTab = tab as typeof workout.activeTab)} />
+	<WorkoutHeader
+		activeTab={workout.activeTab}
+		onTabChange={(tab) => (workout.activeTab = tab as typeof workout.activeTab)}
+		{user}
+	/>
 
 	<main class="flex-1 pb-10">
 		{#if workout.activeTab === 'readiness'}

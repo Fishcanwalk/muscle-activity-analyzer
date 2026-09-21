@@ -26,12 +26,12 @@ async def create_session_result(
 @router.get("", response_model=list[SessionResult])
 async def list_session_results(
     limit: int = Query(default=50, le=200),
+    session_id: str | None = Query(default=None),
     current_user: dict = Depends(get_current_user),
 ) -> list[SessionResult]:
     db = get_database()
-    cursor = (
-        db.session_results.find({"user_id": str(current_user["_id"])})
-        .sort("created_at", -1)
-        .limit(limit)
-    )
+    query: dict = {"user_id": str(current_user["_id"])}
+    if session_id is not None:
+        query["session_id"] = session_id
+    cursor = db.session_results.find(query).sort("created_at", -1).limit(limit)
     return [session_doc_to_model(doc) async for doc in cursor]

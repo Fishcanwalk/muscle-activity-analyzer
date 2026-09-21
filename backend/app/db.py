@@ -18,3 +18,6 @@ async def create_indexes() -> None:
         expireAfterSeconds=settings.TELEMETRY_RETENTION_DAYS * 86400,
     )
     await database.session_results.create_index([("user_id", 1), ("created_at", -1)])
+    await database.session_results.create_index("session_id")
+    await database.calibrations.create_index("user_id", unique=True)
+    await database.telemetry_samples.create_index([("user_id", 1), ("received_at", -1)])

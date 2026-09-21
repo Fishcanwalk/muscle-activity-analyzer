@@ -8,7 +8,27 @@
 	import { Lightning, Eye, EyeClosed, CaretDown } from 'phosphor-svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
-	import { PRESET_USERS, userManager } from '$lib/workout/user.svelte';
+
+	// Minimal, non-fabricated quick-picker: just the 3 demo accounts seeded by the
+	// backend (see backend/app/seed.py / backend/README.md "Demo users"), all
+	// sharing the password below. Replaces the old mock `userManager`/`PRESET_USERS`
+	// profile data, which is no longer used by the (now real) auth flow.
+	const DEMO_ACCOUNTS = [
+		{ email: 'nont@cyberpump.io', name: 'ธนาวัฒน์ (นนท์)' },
+		{ email: 'karn@cyberpump.io', name: 'กานต์ กิตติธร' },
+		{ email: 'suphawit@cyberpump.io', name: 'ศุภวิชญ์ พัฒนศักดิ์' }
+	];
+	const DEMO_PASSWORD = 'cyberpump123';
+
+	function demoInitials(name: string): string {
+		return name
+			.trim()
+			.split(/\s+/)
+			.map((p) => p[0])
+			.slice(0, 2)
+			.join('')
+			.toUpperCase();
+	}
 
 	type LoginFormProps = {
 		form: SuperValidated<Infer<typeof loginSchema>>;
@@ -27,7 +47,6 @@
 			if (event.result.type === 'redirect') {
 				toast.success('เข้าสู่ระบบสำเร็จ');
 				const endpoint = String(event.result.location || '/dashboard');
-				userManager.switchUser($formData.email);
 				await goto(endpoint);
 			}
 			if (event.result.type === 'error') {
@@ -43,7 +62,7 @@
 
 	function selectDemoUser(email: string) {
 		$formData.email = email;
-		$formData.password = 'cyberpump123';
+		$formData.password = DEMO_PASSWORD;
 		if (formRef) {
 			setTimeout(() => {
 				formRef?.requestSubmit();
@@ -142,7 +161,7 @@
 		</button>
 		{#if showDemoAccounts}
 			<div class="space-y-1.5 px-3 pb-3">
-				{#each Object.values(PRESET_USERS) as u (u.email)}
+				{#each DEMO_ACCOUNTS as u (u.email)}
 					<button
 						type="button"
 						disabled={$submitting}
@@ -153,7 +172,7 @@
 							<span
 								class="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-xs font-semibold text-zinc-200 group-hover:border-zinc-700"
 							>
-								{u.avatar}
+								{demoInitials(u.name)}
 							</span>
 							<div>
 								<div
@@ -162,7 +181,7 @@
 									{u.name}
 								</div>
 								<div class="text-[11px] text-zinc-400">
-									{u.weightKg} kg · {u.totalSessions} Sessions
+									{u.email}
 								</div>
 							</div>
 						</div>

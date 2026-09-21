@@ -60,3 +60,5 @@ class TelemetryIngest(BaseModel):
     vitals: VitalsState | None = None
     device: DeviceState | None = None
     timestamp: int | None = None
+    user_id: str | None = None
+    session_id: str | None = None

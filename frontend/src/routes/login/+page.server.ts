@@ -5,14 +5,12 @@ import { zod4 } from 'sveltekit-superforms/adapters';
 import { loginSchema } from '$lib/schemas/auth.schema';
 import { logger, sanitize } from '$lib/logger';
 import { setAuthTokens } from '$lib/utils/auth';
-import { PRESET_USERS } from '$lib/workout/user.svelte';
 
 export const load = (async () => {
 	const form = await superValidate(zod4(loginSchema));
 
 	return {
-		form,
-		presetUsers: Object.values(PRESET_USERS)
+		form
 	};
 }) satisfies PageServerLoad;
 

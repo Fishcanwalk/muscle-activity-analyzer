@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { workout } from '$lib/workout/workout.svelte';
-	import { userManager } from '$lib/workout/user.svelte';
 	import {
 		Lightning,
 		Barbell,
@@ -17,9 +16,24 @@
 	interface Props {
 		activeTab: string;
 		onTabChange: (tab: string) => void;
+		user: { name?: string; email: string; avatar?: string | null; [key: string]: unknown };
 	}
 
-	let { activeTab, onTabChange }: Props = $props();
+	let { activeTab, onTabChange, user }: Props = $props();
+
+	let displayName = $derived(user.name || user.email);
+	let avatarInitials = $derived(
+		user.avatar ||
+			(user.name
+				? user.name
+						.trim()
+						.split(/\s+/)
+						.map((p) => p[0])
+						.slice(0, 2)
+						.join('')
+						.toUpperCase()
+				: user.email.slice(0, 2).toUpperCase())
+	);
 </script>
 
 <header class="sticky top-0 z-50 border-b border-zinc-800 bg-zinc-950/90 px-4 pt-2.5 pb-0 backdrop-blur-md">
@@ -43,13 +57,13 @@
 			<a
 				href="/dashboard"
 				class="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 px-2.5 py-1 text-zinc-200 transition group"
-				title="User: {userManager.currentUser.name}"
+				title="User: {displayName}"
 			>
 				<span class="w-5 h-5 rounded bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-emerald-400">
-					{userManager.currentUser.avatar}
+					{avatarInitials}
 				</span>
 				<span class="text-xs font-sans text-zinc-300 group-hover:text-emerald-400 transition-colors">
-					{userManager.currentUser.name.split(' ')[0]}
+					{displayName.split(' ')[0]}
 				</span>
 			</a>
 

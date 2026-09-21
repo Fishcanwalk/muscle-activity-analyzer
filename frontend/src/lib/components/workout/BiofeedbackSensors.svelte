@@ -77,6 +77,31 @@
 			<span class="text-zinc-400">Rep 1 Velocity (baseline)</span>
 			<span class="text-zinc-200 font-semibold">{formatDec(telemetry.mpu.rep1Velocity)} m/s</span>
 		</div>
+
+		<!-- Raw Orientation & Acceleration (every MPU value, not just derived velocity) -->
+		<div class="grid grid-cols-5 gap-1.5 pt-1.5 mt-1.5 border-t border-zinc-800/80 text-center">
+			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">Pitch</div>
+				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.pitch, 1)}°</div>
+			</div>
+			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">Roll</div>
+				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.roll, 1)}°</div>
+			</div>
+			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">Ax</div>
+				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.ax, 1)}</div>
+			</div>
+			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">Ay</div>
+				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.ay, 1)}</div>
+			</div>
+			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">Az</div>
+				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.az, 1)}</div>
+			</div>
+		</div>
+		<div class="pt-0.5 text-center text-[9px] text-zinc-500 font-mono">Accel in m/s² · Pitch/Roll in degrees</div>
 	</div>
 
 	<!-- FSR Grip Force Card (1 column) -->

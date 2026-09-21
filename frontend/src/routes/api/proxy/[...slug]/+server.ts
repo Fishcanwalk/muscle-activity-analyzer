@@ -91,7 +91,11 @@ const handler: RequestHandler = async ({ request, cookies, params, fetch, url })
 	try {
 		let response = await makeApiRequest(accessToken);
 
-		if (response.status === 401 && accessToken) {
+		if (response.status === 401) {
+			// Also reached when accessToken is missing (its 10-minute cookie already
+			// expired while refresh_token's 7-day one hasn't) -- without this, a
+			// stale-but-not-yet-guard-rejected session hits a bare 401 on every
+			// (auth) page instead of silently refreshing.
 			logger.warn(`[API Proxy] Unauthorized request, trying to refresh access token.`);
 			const refreshToken = cookies.get('refresh_token');
 			if (!refreshToken) {

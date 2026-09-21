@@ -1,9 +1,5 @@
-<script lang="ts">
-	import WorkoutDashboard from '$lib/components/workout/WorkoutDashboard.svelte';
-</script>
-
-<svelte:head>
-	<title>CYBERPUMP - Workout Performance & Biofeedback System</title>
-</svelte:head>
-
-<WorkoutDashboard />
+<!--
+	This route always redirects on to /home (see +page.server.ts) -- it never
+	actually renders. Kept minimal rather than deleted since SvelteKit's routing
+	requires a +page.svelte alongside +page.server.ts for a page route.
+-->
