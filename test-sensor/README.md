@@ -126,6 +126,8 @@ pio run -d test-sensor -e uno_all -t upload -t monitor
 - `arduino/06_mlx90614_test/06_mlx90614_test.ino` (ทดสอบวัดอุณหภูมิอินฟราเรด)
 - `arduino/07_all_diagnostics/07_all_diagnostics.ino` (ทดสอบอ่านค่ารวมทุกตัว)
 - `arduino/09_full_sensor_debug/09_full_sensor_debug.ino` (ESP32 เท่านั้น -- debug ทุกเซนเซอร์ + ปุ่มกด พร้อมกัน ผ่าน Serial Monitor เดียว โดยไม่ต้องต่อ WiFi/เซิร์ฟเวอร์ หรือจอ LCD; ใช้ logic เดียวกับ `src/esp32_workout_firmware.cpp` เช่น velocity/pitch/roll, HR/SpO2 โดยประมาณ, FSR stability)
+- `arduino/esp32_workout_firmware/esp32_workout_firmware.ino` (ESP32 เท่านั้น -- เฟิร์มแวร์หลักตัวเต็ม: WiFi + ปุ่ม 2 ปุ่ม + จอ LCD + บัซเซอร์ + รับค่า sEMG/FSR จาก Arduino Uno ผ่าน UART; ดูการต่อสายที่ [`PINS.md`](../PINS.md) ที่ root ของโปรเจกต์ ต้องติดตั้งไลบรารีเพิ่มอีก 1 ตัวคือ `LiquidCrystal_I2C` นอกจาก 4 ตัวด้านล่าง)
+- `arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino` (Arduino Uno/Nano เท่านั้น -- อ่าน sEMG (A0) + FSR (A1) ที่ 100Hz แล้วส่งให้ ESP32 ผ่าน UART (`SoftwareSerial` พิน 2/3); ไม่ต้องติดตั้งไลบรารีเพิ่มเติมนอกจาก `SoftwareSerial` ซึ่งมีอยู่แล้วใน Arduino core)
 
 ### ขั้นตอนการตั้งค่าใน Arduino IDE:
 1. **เพิ่ม Board URL สำหรับ ESP8266 / ESP32:**
@@ -145,6 +147,7 @@ pio run -d test-sensor -e uno_all -t upload -t monitor
      - `SparkFun MAX3010x Pulse and Proximity Sensor Library`
      - `Adafruit MLX90614 Library`
      - `Adafruit Unified Sensor`
+   - ถ้าจะเปิด `arduino/esp32_workout_firmware/` ต้องติดตั้งเพิ่มอีก 1 ตัว: `LiquidCrystal_I2C` (by Frank de Brabander/marcoschwartz)
 4. **เปิด Sketch และ Upload:**
    - ไปที่ `File` -> `Open...` แล้วเลือกไฟล์ `.ino` จากโฟลเดอร์ `test-sensor/arduino/<ชื่อโฟลเดอร์>/`
    - เลือก Board: `NodeMCU 1.0 (ESP-12E Module)` หรือบอร์ดที่คุณใช้งาน

@@ -1,6 +1,6 @@
 # 📌 ESP32 Pinout — Muscle Activity Analyzer
 
-พินทั้งหมดที่ใช้บน **ESP32 DevKit (3.3V Logic)** สำหรับเฟิร์มแวร์ในโฟลเดอร์ [`test-sensor/src/`](test-sensor/src/) โดยเฉพาะไฟล์ `esp32_connectToWifi.cpp` และไฟล์ที่แตกออกมาจากมัน
+พินทั้งหมดที่ใช้บน **ESP32 DevKit (3.3V Logic)** สำหรับเฟิร์มแวร์ในโฟลเดอร์ [`test-sensor/src/`](test-sensor/src/) โดยเฉพาะไฟล์ `esp32_connectToWifi.cpp`, `esp32_workout_firmware.cpp` และไฟล์ที่แตกออกมาจากมัน (รวมถึง `uno_emg_fsr_link.cpp` บน Arduino Uno ที่เชื่อมกับ `esp32_workout_firmware.cpp` ผ่าน UART)
 
 ที่มาของค่าพิน: [`test-sensor/include/board_config.h`](test-sensor/include/board_config.h)
 
@@ -10,10 +10,35 @@
 | :--- | :--- | :--- | :--- |
 | I2C SDA | **GPIO 21** | I2C | ใช้ร่วมกันทั้ง MPU-6050/6500, MAX30102, MLX90614 (ต้องมี Pull-up 4.7kΩ ไปที่ 3.3V) |
 | I2C SCL | **GPIO 22** | I2C | ใช้ร่วมกันกับทั้ง 3 เซนเซอร์ I2C ด้านบน |
-| sEMG (Analog) | **GPIO 34** | ADC1 CH6, `analogRead` | อ่านค่าไฟฟ้ากล้ามเนื้อ, ADC1 ใช้ร่วมกับ WiFi ได้ปกติ |
-| FSR (Analog) | **GPIO 35** | ADC1 CH7, `analogRead` | อ่านค่าแรงกด, ADC1 ใช้ร่วมกับ WiFi ได้ปกติ |
+| sEMG (Analog) | **GPIO 34** | ADC1 CH6, `analogRead` | อ่านค่าไฟฟ้ากล้ามเนื้อ, ADC1 ใช้ร่วมกับ WiFi ได้ปกติ — ใช้เฉพาะ `esp32_connectToWifi.cpp` (รุ่นเก่า); `esp32_workout_firmware.cpp` รับค่านี้จาก Arduino Uno ผ่าน UART แทน ดูหัวข้อ "UART Link" ด้านล่าง |
+| FSR (Analog) | **GPIO 35** | ADC1 CH7, `analogRead` | อ่านค่าแรงกด, ADC1 ใช้ร่วมกับ WiFi ได้ปกติ — ใช้เฉพาะ `esp32_connectToWifi.cpp` (รุ่นเก่า); `esp32_workout_firmware.cpp` รับค่านี้จาก Arduino Uno ผ่าน UART แทน ดูหัวข้อ "UART Link" ด้านล่าง |
 
 > ⚠️ ห้ามใช้ ADC2 (GPIO 0, 2, 4, 12–15, 25–27) สำหรับ `analogRead` ขาใหม่ๆ ถ้าโปรแกรมเปิด WiFi ไว้ (ตัว ESP32 มีข้อจำกัดว่า ADC2 ใช้ร่วมกับ WiFi ไม่ได้) — แต่ใช้เป็น digital input/output (เช่นปุ่มกด) ได้ตามปกติ
+
+## UART Link ระหว่าง ESP32 กับ Arduino Uno (sEMG + FSR — ของใหม่ `esp32_workout_firmware.cpp`)
+
+`esp32_workout_firmware.cpp` ไม่อ่าน sEMG/FSR จากขา ADC ของตัวเองอีกแล้ว แต่รับค่าจาก Arduino Uno ที่รัน `uno_emg_fsr_link.cpp` ผ่านสาย UART แทน
+
+### ขาเซนเซอร์บน Arduino Uno (ของใหม่)
+
+| สัญญาณ | Arduino Uno | โหมด | หมายเหตุ |
+| :--- | :--- | :--- | :--- |
+| sEMG (Analog) | **Pin A0** | `analogRead`, 10-bit (0-1023) | อ่านค่าไฟฟ้ากล้ามเนื้อ, ต่อเข้า Uno แทนที่จะเป็น ESP32 |
+| FSR (Analog) | **Pin A1** | `analogRead`, 10-bit (0-1023) | อ่านค่าแรงกด, กลับด้านค่า (`ADC_MAX_VAL - analogRead(...)`) แล้วสเกลเป็น 12-bit ก่อนส่งให้ ESP32 ดูหัวข้อ Protocol ด้านล่าง |
+
+ที่มาของค่าพิน: Uno ใช้ `board_config.h` ตัวเดียวกับ ESP32/ESP8266 แต่ auto-detect เป็นสาขา `ARDUINO_ARCH_AVR` ซึ่ง fix พินไว้ที่ A0/A1 เหมือนกันกับที่ระบุไว้ในตารางเปรียบเทียบพินของ [`test-sensor/README.md`](test-sensor/README.md)
+
+### พินเชื่อมต่อ UART (ESP32 ↔ Uno)
+
+| สัญญาณ | ESP32 | Arduino Uno | หมายเหตุ |
+| :--- | :--- | :--- | :--- |
+| Uno TX → ESP32 RX | **GPIO 16** (RX2) | Pin **3** (SoftwareSerial TX) | ⚠️ **ต้องมี Voltage Divider** ก่อนเข้า GPIO16 เพราะ Uno ส่งสัญญาณ 5V แต่ ESP32 รับได้สูงสุด 3.3V — ใช้ตัวต้านทาน 2 ตัว R1=1kΩ (จาก Uno TX) ต่อ R2=2.2kΩ (ลง GND) แล้วดึงจุดกลางเข้า GPIO16 (ได้ ~3.44V, ค่ามาตรฐาน E12 ทั้งคู่ หาซื้อง่าย) |
+| ESP32 TX → Uno RX | **GPIO 17** (TX2) | Pin **2** (SoftwareSerial RX) | ต่อตรงได้ (3.3V มักพอเกิน threshold ของ Uno ที่ 5V) ถ้าอ่านค่าไม่นิ่ง ให้เพิ่ม pull-up 10kΩ ไปที่ 5V ที่ขานี้ หรือใช้ Level Shifter เหมือน I2C |
+| GND ร่วม | **GND** | **GND** | จำเป็นเสมอ ไม่มี GND ร่วม = สัญญาณอ่านผิดพลาด/สื่อสารไม่ได้ |
+
+- **Baud rate:** 9600 (ฝั่ง Uno ใช้ `SoftwareSerial` บนขา 2/3 — เว้นขา 0/1 (hardware Serial) ไว้ให้ USB debug ล้วนๆ ไม่ชนกับลิงก์นี้; ฝั่ง ESP32 ใช้ `Serial2` ซึ่งเป็น hardware UART ตัวที่ 3 ของชิป ไม่ชนกับ `Serial` ที่ใช้ debug ผ่าน USB)
+- **Protocol:** Uno ส่งข้อความ 1 บรรทัดทุก ~10ms (100Hz) รูปแบบ `<emg>,<fsr>\n` โดยค่าที่ส่งถูกสเกลจาก ADC 10-bit ของ Uno (0-1023) ขึ้นมาเป็น 12-bit (0-4095) ให้ตรงกับสเกลที่ ESP32/เว็บเซิร์ฟเวอร์คาดไว้ (`ADC_MAX = 4095` ใน `telemetryStore.ts`) และ FSR ถูกกลับด้าน (`ADC_MAX_VAL - analogRead(...)`) ให้ค่ามาก = กำแรงตั้งแต่ฝั่ง Uno แล้ว ฝั่ง ESP32 ไม่ต้องแปลงซ้ำ
+- **ถ้าลิงก์ขาด** (ไม่ได้ต่อ Uno / สายหลุด): ESP32 จะพิมพ์ `[UART] Uno EMG/FSR link LOST` ผ่าน Serial Monitor (ตรวจจากไม่มีข้อมูลเข้ามาเกิน 500ms) และคงค่า sEMG/FSR ล่าสุดที่เคยได้รับไว้ (ไม่รีเซ็ตเป็น 0)
 
 ## ปุ่มกด (ของใหม่ — สำหรับไฟล์ทดสอบปุ่ม)
 
@@ -59,5 +84,6 @@ Library: `marcoschwartz/LiquidCrystal_I2C` (ประกาศไว้เฉพ
 
 ## ไฟล์ที่เกี่ยวข้อง
 
-- [`test-sensor/src/esp32_workout_firmware.cpp`](test-sensor/src/esp32_workout_firmware.cpp) — เฟิร์มแวร์หลัก (WiFi + 6 เซนเซอร์ + ปุ่ม 2 ปุ่ม + จอ LCD แสดง REP/Velocity/HR + บัซเซอร์แจ้งเตือนแรงกำต่ำ/ไม่นิ่ง; ปุ่มยังไม่ผูก logic เพิ่ม/ลด REP รอกำหนดพฤติกรรมเพิ่มเติม)
-- [`test-sensor/src/esp32_connectToWifi.cpp`](test-sensor/src/esp32_connectToWifi.cpp) — เฟิร์มแวร์รุ่นก่อนหน้า ไม่มีปุ่ม/จอ LCD/บัซเซอร์ (WiFi + 6 เซนเซอร์)
+- [`test-sensor/src/esp32_workout_firmware.cpp`](test-sensor/src/esp32_workout_firmware.cpp) — เฟิร์มแวร์หลัก (WiFi + 6 เซนเซอร์ + ปุ่ม 2 ปุ่ม + จอ LCD แสดง REP/Velocity/HR + บัซเซอร์แจ้งเตือนแรงกำต่ำ/ไม่นิ่ง; ปุ่มยังไม่ผูก logic เพิ่ม/ลด REP รอกำหนดพฤติกรรมเพิ่มเติม; sEMG/FSR รับผ่าน UART จาก Arduino Uno แทน `analogRead` ของตัวเอง ดูหัวข้อ "UART Link" ด้านบน)
+- [`test-sensor/src/uno_emg_fsr_link.cpp`](test-sensor/src/uno_emg_fsr_link.cpp) — เฟิร์มแวร์ Arduino Uno (ของใหม่) อ่าน sEMG (A0) + FSR (A1) ที่ 100Hz แล้วส่งให้ ESP32 ผ่าน UART (`uno_emg_fsr_link` env ใน `platformio.ini`)
+- [`test-sensor/src/esp32_connectToWifi.cpp`](test-sensor/src/esp32_connectToWifi.cpp) — เฟิร์มแวร์รุ่นก่อนหน้า ไม่มีปุ่ม/จอ LCD/บัซเซอร์ (WiFi + 6 เซนเซอร์, อ่าน sEMG/FSR จากขาตัวเองโดยตรง)
