@@ -158,17 +158,17 @@
 					<div class="text-[10px] text-zinc-400 mt-0.5">Time under tension</div>
 				</div>
 
-				<!-- Peak sEMG -->
+				<!-- Peak Muscle Effort -->
 				<div class="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition">
 					<div class="flex items-center justify-between text-zinc-400 mb-1">
-						<span class="text-[11px]">Peak sEMG</span>
+						<span class="text-[11px]">ออกแรงสูงสุด</span>
 						<Lightning size={14} class="text-cyan-400" />
 					</div>
 					<div class="text-xl font-bold font-mono text-zinc-100">
-						{currentUser.personalRecords.peakEmgUv}
-						<span class="text-xs text-zinc-400 font-sans font-normal">µV</span>
+						{currentUser.personalRecords.peakEmgPercent}
+						<span class="text-xs text-zinc-400 font-sans font-normal">%</span>
 					</div>
-					<div class="text-[10px] text-zinc-400 mt-0.5">Motor unit drive</div>
+					<div class="text-[10px] text-zinc-400 mt-0.5">% ของแรงสูงสุดที่เคยทำได้</div>
 				</div>
 
 				<!-- Best ROM -->
@@ -250,7 +250,7 @@
 							<div class="flex items-center gap-3">
 								<span class="text-zinc-300">{fp.rom}°</span>
 								<span class="text-emerald-400 font-semibold">{fp.purity}%</span>
-								<span class="text-[10px] text-zinc-400">{fp.emg} µV</span>
+								<span class="text-[10px] text-zinc-400">ออกแรง {fp.emgPercent}%</span>
 							</div>
 						</div>
 					{/each}

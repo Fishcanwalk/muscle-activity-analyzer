@@ -17,3 +17,17 @@ export function round3(val: number | null | undefined): number {
 	if (val === null || val === undefined || isNaN(val)) return 0;
 	return Math.round(val * 1000) / 1000;
 }
+
+/** Standard gravity, used to convert sensor force readings (Newtons) into the
+ * kilograms-force that gym users actually think in. */
+const STANDARD_GRAVITY = 9.80665;
+
+/**
+ * Converts a force reading in Newtons to kilograms-force (kgf), the unit
+ * people recognize from weight plates and grip dynamometers.
+ * e.g., 98.0665 N -> 10 kg
+ */
+export function nToKg(newtons: number | null | undefined): number {
+	if (newtons === null || newtons === undefined || isNaN(newtons)) return 0;
+	return newtons / STANDARD_GRAVITY;
+}

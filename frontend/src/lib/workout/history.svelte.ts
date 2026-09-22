@@ -11,15 +11,27 @@ export interface SessionTrendPoint {
 	weight: number;
 	cleanReps: number;
 	purity: number;
+	/** % of the user's calibrated MVC, not the raw µV the sensor/backend use internally. */
 	sEmgRms: number;
 	rom: number;
 	cleanVolume: number;
 }
 
+// Demo comparison dates are computed relative to the real "today" (instead of a
+// hardcoded string) so the "(วันนี้)" label in the UI never drifts out of sync with
+// the actual date.
+function thaiDateLabel(date: Date): string {
+	return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+const today = new Date();
+const twoSessionsAgo = new Date(today);
+twoSessionsAgo.setDate(today.getDate() - 2);
+
 class HistoryManager {
 	comparison = $state({
-		previousDate: '9 ก.ย. 2026',
-		currentDate: '11 ก.ย. 2026 (วันนี้)',
+		previousDate: thaiDateLabel(twoSessionsAgo),
+		currentDate: thaiDateLabel(today),
 		metrics: [
 			{
 				name: 'น้ำหนักดัมเบล (Load)',
@@ -50,10 +62,10 @@ class HistoryManager {
 				isPositive: true
 			},
 			{
-				name: 'Peak sEMG Activation',
-				prev: '390 µV',
-				curr: '425 µV',
-				delta: '+8.9% (Neural Drive ดีขึ้น)',
+				name: 'ออกแรงกล้ามเนื้อสูงสุด',
+				prev: '67%',
+				curr: '73%',
+				delta: '+8.9% (สั่งการกล้ามเนื้อดีขึ้น)',
 				isPositive: true
 			},
 			{
@@ -86,7 +98,7 @@ class HistoryManager {
 			weight: 10.0,
 			cleanReps: 24,
 			purity: 72,
-			sEmgRms: 340,
+			sEmgRms: 59,
 			rom: 112,
 			cleanVolume: 240
 		},
@@ -95,7 +107,7 @@ class HistoryManager {
 			weight: 10.0,
 			cleanReps: 27,
 			purity: 79,
-			sEmgRms: 360,
+			sEmgRms: 62,
 			rom: 115,
 			cleanVolume: 270
 		},
@@ -104,7 +116,7 @@ class HistoryManager {
 			weight: 12.5,
 			cleanReps: 16,
 			purity: 70,
-			sEmgRms: 375,
+			sEmgRms: 65,
 			rom: 114,
 			cleanVolume: 200
 		},
@@ -113,7 +125,7 @@ class HistoryManager {
 			weight: 12.5,
 			cleanReps: 18,
 			purity: 78,
-			sEmgRms: 390,
+			sEmgRms: 67,
 			rom: 118,
 			cleanVolume: 225
 		},
@@ -122,7 +134,7 @@ class HistoryManager {
 			weight: 12.5,
 			cleanReps: 22,
 			purity: 91,
-			sEmgRms: 425,
+			sEmgRms: 73,
 			rom: 124,
 			cleanVolume: 275
 		}

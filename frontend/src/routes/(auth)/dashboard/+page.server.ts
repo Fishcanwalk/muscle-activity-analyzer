@@ -58,7 +58,21 @@ function mostFrequent(values: string[]): string {
 	return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
-function buildDashboardProfile(user: ApiUser, sessionsDescRaw: SessionResult[]): UserProfile {
+// The backend stores rep amplitude in raw µV (a lab unit, not something a gym user
+// reads meaningfully); this converts to % of the user's calibrated MVC, the same
+// "% effort" scale the rest of the app displays. DEFAULT_MVC_UV mirrors the client
+// calibration default (calibration.svelte.ts) for users who never ran calibration.
+const DEFAULT_MVC_UV = 580;
+
+function uvToMvcPercent(uv: number, emgMvcUv: number): number {
+	return Math.round((uv / (emgMvcUv || DEFAULT_MVC_UV)) * 100);
+}
+
+function buildDashboardProfile(
+	user: ApiUser,
+	sessionsDescRaw: SessionResult[],
+	emgMvcUv: number
+): UserProfile {
 	const sessionsDesc = sessionsDescRaw.map((s) => ({ ...s, reps: s.reps ?? [] }));
 	const sessions = [...sessionsDesc].reverse(); // chronological ascending
 
@@ -73,7 +87,9 @@ function buildDashboardProfile(user: ApiUser, sessionsDescRaw: SessionResult[]):
 			? Math.round(Math.max(...sessions.map((s) => s.weightKg * s.cleanReps)))
 			: 0,
 		longestTutSec: sessions.length ? Math.max(...sessions.map((s) => s.highTensionTutSeconds)) : 0,
-		peakEmgUv: allReps.length ? Math.round(Math.max(...allReps.map((r) => r.peakEmg))) : 0,
+		peakEmgPercent: allReps.length
+			? uvToMvcPercent(Math.max(...allReps.map((r) => r.peakEmg)), emgMvcUv)
+			: 0,
 		bestRomDeg: allReps.length ? Math.round(Math.max(...allReps.map((r) => r.rom))) : 0,
 		lowestCheatPercent: cheatPercents.length ? Math.round(Math.min(...cheatPercents) * 10) / 10 : 0
 	};
@@ -92,7 +108,9 @@ function buildDashboardProfile(user: ApiUser, sessionsDescRaw: SessionResult[]):
 		session: thaiDate(s.created_at).replace(/\s\d{4}$/, ''),
 		purity: Math.round(s.formPurityPercent),
 		rom: s.reps.length ? Math.round(s.reps.reduce((sum, r) => sum + r.rom, 0) / s.reps.length) : 0,
-		emg: s.reps.length ? Math.round(Math.max(...s.reps.map((r) => r.peakEmg))) : 0
+		emgPercent: s.reps.length
+			? uvToMvcPercent(Math.max(...s.reps.map((r) => r.peakEmg)), emgMvcUv)
+			: 0
 	}));
 
 	const historyLogs = sessionsDesc.slice(0, 30).map((s) => ({
@@ -135,11 +153,12 @@ export const load: PageServerLoad = async (event) => {
 		throw error(401, 'Not authenticated');
 	}
 
-	const { data: sessions } = await event.locals.fastapiClient.GET('/v1/sessions', {
-		params: { query: { limit: 200 } }
-	});
+	const [{ data: sessions }, { data: calibration }] = await Promise.all([
+		event.locals.fastapiClient.GET('/v1/sessions', { params: { query: { limit: 200 } } }),
+		event.locals.fastapiClient.GET('/v1/calibration')
+	]);
 
 	return {
-		user: buildDashboardProfile(apiUser, sessions ?? [])
+		user: buildDashboardProfile(apiUser, sessions ?? [], calibration?.emgMvc ?? DEFAULT_MVC_UV)
 	};
 };

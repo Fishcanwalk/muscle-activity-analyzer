@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { telemetry } from '$lib/workout/telemetry.svelte';
-	import { formatDec } from '$lib/utils/format';
+	import { formatDec, nToKg } from '$lib/utils/format';
 	import { Gauge, Target, HandPalm, Heartbeat, ThermometerSimple, TrendDown, Drop } from 'phosphor-svelte';
 
 	function statusDotClass(status: 'live' | 'stale' | 'never') {
@@ -21,7 +21,7 @@
 					MPU-6050 (ESP32)
 				</span>
 				<span class="text-zinc-600">·</span>
-				<h4 class="text-xs font-semibold text-zinc-200">Velocity-Based Training (VBT)</h4>
+				<h4 class="text-xs font-semibold text-zinc-200">ฝึกตามความเร็วยก (VBT)</h4>
 			</div>
 			<span
 				class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono uppercase {telemetry.mpu
@@ -31,10 +31,10 @@
 			>
 				{#if telemetry.mpu.isEffectiveZone}
 					<Target size={11} weight="bold" class="text-emerald-400" />
-					<span>Zone (30-40%)</span>
+					<span>โซนที่เหมาะสม (30-40%)</span>
 				{:else}
 					<Gauge size={11} class="text-zinc-400" />
-					<span>Regular</span>
+					<span>ปกติ</span>
 				{/if}
 			</span>
 		</div>
@@ -42,7 +42,7 @@
 		<div class="grid grid-cols-2 gap-2.5 py-2">
 			<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
 				<div class="flex items-center justify-between text-zinc-400 text-[11px] mb-0.5 font-mono">
-					<span>Concentric Velocity</span>
+					<span>ความเร็วในการยก</span>
 					<Gauge size={13} class="text-cyan-400" />
 				</div>
 				<div class="text-xl font-bold font-mono text-zinc-100">
@@ -52,7 +52,7 @@
 
 			<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
 				<div class="flex items-center justify-between text-zinc-400 text-[11px] mb-0.5 font-mono">
-					<span>Velocity Loss</span>
+					<span>ความเร็วที่ลดลง</span>
 					<TrendDown size={13} class={telemetry.mpu.velocityLossPercent >= 30 ? 'text-emerald-400' : 'text-zinc-400'} />
 				</div>
 				<div
@@ -74,18 +74,18 @@
 		</div>
 
 		<div class="flex items-center justify-between pt-1.5 mt-1.5 border-t border-zinc-800/80 text-[10px] font-mono">
-			<span class="text-zinc-400">Rep 1 Velocity (baseline)</span>
+			<span class="text-zinc-400">ความเร็วครั้งแรก (จุดฐาน)</span>
 			<span class="text-zinc-200 font-semibold">{formatDec(telemetry.mpu.rep1Velocity)} m/s</span>
 		</div>
 
 		<!-- Raw Orientation & Acceleration (every MPU value, not just derived velocity) -->
 		<div class="grid grid-cols-5 gap-1.5 pt-1.5 mt-1.5 border-t border-zinc-800/80 text-center">
 			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">Pitch</div>
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">มุมก้ม-เงย</div>
 				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.pitch, 1)}°</div>
 			</div>
 			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">Roll</div>
+				<div class="text-[9px] text-zinc-500 uppercase font-mono">มุมเอียงข้าง</div>
 				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.roll, 1)}°</div>
 			</div>
 			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
@@ -101,7 +101,7 @@
 				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.az, 1)}</div>
 			</div>
 		</div>
-		<div class="pt-0.5 text-center text-[9px] text-zinc-500 font-mono">Accel in m/s² · Pitch/Roll in degrees</div>
+		<div class="pt-0.5 text-center text-[9px] text-zinc-500 font-mono">ความเร่ง (m/s²) · มุมก้ม-เงย/เอียงข้าง (องศา)</div>
 	</div>
 
 	<!-- FSR Grip Force Card (1 column) -->
@@ -119,23 +119,23 @@
 
 		<div class="py-2">
 			<div class="flex items-center justify-between">
-				<div class="text-[11px] text-zinc-400 font-mono">Grip Force</div>
+				<div class="text-[11px] text-zinc-400 font-mono">แรงบีบมือ</div>
 				<span
 					class="rounded-full border px-1.5 py-0.5 text-[9px] font-mono uppercase {telemetry.fsr.isStable
 						? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
 						: 'border-amber-500/40 bg-amber-500/10 text-amber-400'}"
 				>
-					{telemetry.fsr.isStable ? 'Stable' : 'Unstable'}
+					{telemetry.fsr.isStable ? 'นิ่ง' : 'ไม่นิ่ง'}
 				</span>
 			</div>
 			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
-				{formatDec(telemetry.fsr.gripForce)} <span class="text-xs font-normal text-zinc-400 font-sans">N</span>
+				{formatDec(nToKg(telemetry.fsr.gripForce), 1)} <span class="text-xs font-normal text-zinc-400 font-sans">กก.</span>
 			</div>
 		</div>
 
 		<div class="space-y-1">
 			<div class="flex justify-between text-[10px] font-mono">
-				<span class="text-zinc-400">Stability</span>
+				<span class="text-zinc-400">ความนิ่งของแรงบีบ</span>
 				<span class="text-emerald-400 font-semibold">{formatDec(telemetry.fsr.gripStabilityPercent)}%</span>
 			</div>
 			<div class="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
@@ -159,8 +159,8 @@
 
 		<div class="py-2">
 			<div class="flex items-center justify-between">
-				<div class="text-[11px] text-zinc-400 font-mono">Heart Rate</div>
-				<span class="text-[10px] font-mono text-zinc-500">Peak {formatDec(telemetry.vitals.peakHr)} BPM</span>
+				<div class="text-[11px] text-zinc-400 font-mono">อัตราการเต้นหัวใจ</div>
+				<span class="text-[10px] font-mono text-zinc-500">สูงสุด {formatDec(telemetry.vitals.peakHr)} BPM</span>
 			</div>
 			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
 				{formatDec(telemetry.vitals.heartRate)} <span class="text-xs font-normal text-zinc-400 font-sans">BPM</span>
@@ -170,7 +170,7 @@
 		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
 			<span class="text-zinc-400 flex items-center gap-1">
 				<Drop size={13} class="text-sky-400" />
-				SpO2:
+				ออกซิเจนในเลือด:
 			</span>
 			<span class="text-sky-400 font-semibold">{formatDec(telemetry.vitals.spO2)}%</span>
 		</div>
@@ -178,7 +178,7 @@
 		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
 			<span class="text-zinc-400 flex items-center gap-1">
 				<ThermometerSimple size={13} class="text-amber-400" />
-				Skin Temp:
+				อุณหภูมิผิว:
 			</span>
 			<span class="text-amber-400 font-semibold">
 				{formatDec(telemetry.vitals.skinTemp)}°C

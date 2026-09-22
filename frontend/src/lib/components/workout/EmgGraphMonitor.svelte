@@ -33,6 +33,14 @@
 	let meanRms = $state<number>(0);
 	let rmsHistory: number[] = [];
 
+	// The server sends amplitude in µV (a lab unit gym users don't recognize) plus an
+	// already-calibrated %MVC figure for the current sample. We reuse that same
+	// µV-to-%MVC ratio to express peak/mean amplitude in the same familiar "% of max
+	// effort" scale, instead of showing a second, unrelated unit.
+	let mvcRatio = $derived(telemetry.emg.rms > 0 ? telemetry.emg.mvcPercent / telemetry.emg.rms : 0);
+	let peakPercent = $derived(Math.min(999, Math.round(peakUv * mvcRatio)));
+	let meanPercent = $derived(Math.round(meanRms * mvcRatio));
+
 	// Local buffer for rendering, kept in sync with the server's rolling EMG buffer
 	// (same size, shared via EMG_BUFFER_SIZE) so every sample that arrives gets drawn.
 	const BUFFER_SIZE = EMG_BUFFER_SIZE;
@@ -75,14 +83,17 @@
 		ctx.fillStyle = '#09090b';
 		ctx.fillRect(0, 0, width, height);
 
-		// Grid lines & scales — telemetry.emg values are µV per docs/sensor_usage.md
+		// Grid lines & scales. The raw trace is in µV internally, but gym users don't
+		// think in microvolts, so the axis is labeled by effort level instead of the
+		// underlying lab unit.
 		const maxDisplayUv = 600 / gain;
 		const gridSteps = 4;
 		ctx.lineWidth = 1;
 
 		for (let i = -gridSteps; i <= gridSteps; i++) {
 			const y = centerY + (i * (height / 2)) / gridSteps;
-			const uvValue = Math.round((-i * maxDisplayUv) / gridSteps);
+			const levelLabel =
+				i === 0 ? 'พัก' : i === -gridSteps ? 'ออกแรงมาก' : i === gridSteps ? 'ออกแรงมาก' : '';
 
 			ctx.strokeStyle = i === 0 ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.04)';
 			ctx.beginPath();
@@ -90,11 +101,12 @@
 			ctx.lineTo(width, y);
 			ctx.stroke();
 
-			// Voltage scale labels
-			ctx.fillStyle = i === 0 ? '#a1a1aa' : '#52525b';
-			ctx.font = '10px ui-monospace, monospace';
-			ctx.textAlign = 'right';
-			ctx.fillText(`${uvValue >= 0 ? '+' : ''}${uvValue}µV`, 40, y + 3);
+			if (levelLabel) {
+				ctx.fillStyle = i === 0 ? '#a1a1aa' : '#52525b';
+				ctx.font = '10px ui-sans-serif, sans-serif';
+				ctx.textAlign = 'right';
+				ctx.fillText(levelLabel, 40, y + 3);
+			}
 		}
 
 		// Vertical time grid lines
@@ -108,7 +120,8 @@
 			ctx.stroke();
 		}
 
-		// Reference Lines: High Tension (280 µV per docs/sensor_usage.md) & MVC (500 µV)
+		// Reference line marking the "high effort" zone (280 µV internally, see
+		// telemetryStore.ts) — shown to the user as a plain effort threshold, not a voltage.
 		const tensionY = centerY - (280 / maxDisplayUv) * (height / 2);
 		ctx.setLineDash([4, 4]);
 		ctx.strokeStyle = 'rgba(16, 185, 129, 0.4)';
@@ -118,9 +131,9 @@
 		ctx.stroke();
 
 		ctx.fillStyle = '#10b981';
-		ctx.font = '9px ui-monospace, monospace';
+		ctx.font = '9px ui-sans-serif, sans-serif';
 		ctx.textAlign = 'left';
-		ctx.fillText('HIGH TENSION (280µV)', width - 120, tensionY - 4);
+		ctx.fillText('โซนออกแรงหนัก', width - 100, tensionY - 4);
 		ctx.setLineDash([]);
 
 		// Draw RMS Envelope area
@@ -221,7 +234,7 @@
 					</span>
 				</div>
 				<p class="text-[11px] text-zinc-400 font-mono">
-					Dual-trace: Raw AC Microvolts (µV) & RMS Envelope
+					คลื่นสัญญาณกล้ามเนื้อแบบเรียลไทม์ — ยิ่งคลื่นสูง ยิ่งออกแรงมาก
 				</p>
 			</div>
 		</div>
@@ -234,7 +247,7 @@
 					type="button"
 					onclick={() => (gain = 0.5)}
 					class="px-2 py-1 rounded transition {gain === 0.5 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="Zoom Out (±1000µV)"
+					title="ซูมออก (มองภาพรวมทั้งชุด)"
 				>
 					0.5x
 				</button>
@@ -242,7 +255,7 @@
 					type="button"
 					onclick={() => (gain = 1)}
 					class="px-2 py-1 rounded transition {gain === 1 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="Default (±500µV)"
+					title="ขนาดปกติ"
 				>
 					1x
 				</button>
@@ -250,7 +263,7 @@
 					type="button"
 					onclick={() => (gain = 2)}
 					class="px-2 py-1 rounded transition {gain === 2 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="Zoom In (±250µV)"
+					title="ซูมเข้า (มองรายละเอียด)"
 				>
 					2x
 				</button>
@@ -295,53 +308,45 @@
 
 	<!-- Instant Metric Badges (High Contrast, Minimal Text) -->
 	<div class="grid grid-cols-2 gap-2 font-mono">
-		<!-- Current RMS -->
+		<!-- Current effort, as % of this user's calibrated max (was raw µV RMS) -->
 		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">Current RMS</div>
-			<div class="text-xl font-bold {telemetry.emg.isHighTension ? 'text-emerald-400' : 'text-zinc-100'}">
-				{formatDec(telemetry.emg.rms)} <span class="text-xs font-normal text-zinc-400 font-sans">µV</span>
-			</div>
-			<div class="text-[10px] {telemetry.emg.isHighTension ? 'text-emerald-400' : 'text-zinc-400'}">
-				{telemetry.emg.isHighTension ? 'HIGH TENSION' : 'BASELINE NOISE'}
-			</div>
-		</div>
-
-		<!-- Peak Amplitude -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">Peak Contraction</div>
-			<div class="text-xl font-bold text-zinc-100">
-				{formatDec(peakUv)} <span class="text-xs font-normal text-zinc-400 font-sans">µV</span>
-			</div>
-			<div class="text-[10px] text-zinc-400">SESSION MAX</div>
-		</div>
-
-		<!-- Activation % MVC -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">Activation %MVC</div>
+			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงตอนนี้</div>
 			<div class="text-xl font-bold text-cyan-400">
 				{formatDec(telemetry.emg.mvcPercent)}<span class="text-xs font-normal text-zinc-400">%</span>
 			</div>
 			<div class="w-full h-1 rounded-full bg-zinc-800 mt-1 overflow-hidden">
 				<div class="h-full bg-cyan-400 transition-all duration-100" style="width: {telemetry.emg.mvcPercent}%"></div>
 			</div>
+			<div class="text-[10px] {telemetry.emg.isHighTension ? 'text-emerald-400' : 'text-zinc-400'} mt-1">
+				{telemetry.emg.isHighTension ? 'ออกแรงหนัก' : 'อยู่ในระดับผ่อนคลาย'}
+			</div>
+		</div>
+
+		<!-- Peak Amplitude, expressed the same way as "current effort" for consistency -->
+		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
+			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงสูงสุด</div>
+			<div class="text-xl font-bold text-zinc-100">
+				{formatDec(peakPercent)} <span class="text-xs font-normal text-zinc-400 font-sans">%</span>
+			</div>
+			<div class="text-[10px] text-zinc-400">สูงสุดในเซสชันนี้</div>
 		</div>
 
 		<!-- Mean RMS -->
 		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">Mean Window</div>
+			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงเฉลี่ย</div>
 			<div class="text-xl font-bold text-zinc-100">
-				{formatDec(meanRms)} <span class="text-xs font-normal text-zinc-400 font-sans">µV</span>
+				{formatDec(meanPercent)} <span class="text-xs font-normal text-zinc-400 font-sans">%</span>
 			</div>
-			<div class="text-[10px] text-zinc-400">50-SAMPLE ROLLING</div>
+			<div class="text-[10px] text-zinc-400">เฉลี่ยช่วงล่าสุด</div>
 		</div>
 
 		<!-- Signal Quality / Rate -->
 		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">Stream Rate</div>
+			<div class="text-[10px] text-zinc-400 uppercase">ความเร็วสัญญาณ</div>
 			<div class="text-xl font-bold text-emerald-400">
-				{telemetry.streamHz} <span class="text-xs font-normal text-zinc-400 font-sans">Hz</span>
+				{telemetry.streamHz} <span class="text-xs font-normal text-zinc-400 font-sans">ครั้ง/วิ</span>
 			</div>
-			<div class="text-[10px] text-zinc-400">SERVER PACKET RATE</div>
+			<div class="text-[10px] text-zinc-400">ความเสถียรของการเชื่อมต่อ</div>
 		</div>
 	</div>
 
