@@ -15,22 +15,24 @@ Cyberpump ช่วยให้ผู้ฝึกเห็นทั้งจำ�
 
 ## ส่วนประกอบของระบบ
 
-| ส่วนประกอบ | หน้าที่ |
-| --- | --- |
-| `frontend/` | เว็บแอป SvelteKit สำหรับแดชบอร์ด การฝึกสด การปรับเทียบ และการดูผลการฝึก |
-| `backend/` | FastAPI สำหรับบัญชีผู้ใช้ ข้อมูลเซนเซอร์ การปรับเทียบ และประวัติเซสชัน |
-| MongoDB | จัดเก็บผู้ใช้ ข้อมูลการฝึก และข้อมูลที่ระบบต้องเก็บต่อเนื่อง |
-| `test-sensor/` | เฟิร์มแวร์ ESP32 และ Arduino สำหรับอ่านเซนเซอร์และส่ง telemetry |
+| ส่วนประกอบ | หน้าที่                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `test-sensor/`     | เฟิร์มแวร์ ESP32 และ Arduino สำหรับอ่านเซนเซอร์และส่ง telemetry |
 
 ภาพรวมการไหลของข้อมูล:
 
 ```mermaid
 flowchart LR
-    Sensors[ESP32 / Arduino และเซนเซอร์] -->|Telemetry| Web[SvelteKit: แสดงผลและรับข้อมูลสด]
-    Browser[เว็บเบราว์เซอร์] --> Web
+    EMGFSR[sEMG + FSR] -->|Analog| Uno[Arduino Uno / Nano]
+    Uno -->|UART 9600 baud: ค่า sEMG + FSR| ESP32[ESP32]
+    OtherSensors[MPU6050 / MAX30102 / MLX90614] -->|I2C| ESP32
+    ESP32 -->|Wi-Fi: POST /api/telemetry| Web[SvelteKit: รับและกระจายข้อมูลสด]
+    Browser[เว็บเบราว์เซอร์] -->|ดู Dashboard| Web
     Web -->|API| Backend[FastAPI]
     Backend --> Mongo[(MongoDB)]
 ```
+
+Arduino อ่านค่า sEMG และ FSR แล้วส่งให้ ESP32 ผ่าน UART; ESP32 รวมค่ากับข้อมูลจากเซนเซอร์ที่ต่ออยู่กับตัวเอง ก่อนส่ง telemetry ผ่าน Wi-Fi ไปยังเว็บแอป
 
 ดูรายละเอียดการต่อเซนเซอร์และเฟิร์มแวร์ได้ที่ [`test-sensor/README.md`](test-sensor/README.md) และ [ผังขาอุปกรณ์](PINS.md)
 
@@ -73,7 +75,7 @@ npm install
 npm run dev
 ```
 
-เปิดเว็บที่ <http://localhost:5173> โดย Frontend จะเชื่อมกับ Backend ที่ `http://localhost:9000` ตามค่าใน `frontend/.env.example`
+เปิดเว็บที่ [http://localhost:5173](http://localhost:5173) โดย Frontend จะเชื่อมกับ Backend ที่ `http://localhost:9000` ตามค่าใน `frontend/.env.example`
 
 Backend สร้างบัญชีทดลองสำหรับพัฒนาไว้ให้ ใช้ `nont@cyberpump.io` และรหัสผ่าน `cyberpump123` เฉพาะในเครื่องพัฒนาเท่านั้น
 
