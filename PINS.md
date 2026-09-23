@@ -51,6 +51,13 @@
 
 เลือก GPIO 32/33 เพราะเป็นขาที่ยังว่าง ไม่ชนกับ I2C/ADC ของเซนเซอร์เดิม และรองรับ `INPUT_PULLUP` ได้ตามปกติ
 
+> ⚙️ **อัปเดต:** ตั้งแต่การรีแฟกเตอร์เฟิร์มแวร์เป็น FreeRTOS (ดู [`docs/firmware_rtos_power.md`](docs/firmware_rtos_power.md))
+> ปุ่มทั้งสองเปลี่ยนจาก polling เป็น **GPIO interrupt** (`attachInterrupt`, FALLING edge) แทน ไม่มีการ
+> เปลี่ยนขาหรือวิธีต่อสาย พฤติกรรมการกดจากมุมมองผู้ใช้เหมือนเดิมทุกประการ นอกจากนี้ **ปุ่ม A (GPIO 32)**
+> ยังทำหน้าที่เป็น wake source ตอนอุปกรณ์เข้า light sleep (idle ต่อเนื่องเกิน 5 นาทีโดยไม่มีเซตค้างอยู่และ
+> ไม่มีการกดปุ่ม) ด้วย — ปุ่ม B ยังกดใช้งานได้ปกติตอนเครื่องตื่นอยู่ แต่ไม่ใช่ wake source (ข้อจำกัดฮาร์ดแวร์
+> ของชิป ESP32 รุ่นดั้งเดิม อธิบายไว้ในเอกสารข้างต้น)
+
 ### พฤติกรรมบนเว็บ (ผ่าน telemetry POST ที่มีอยู่แล้ว — ไม่มี endpoint ใหม่)
 
 เฟิร์มแวร์ตรวจจับ "ขอบการกด" (press edge, debounce 250ms) แล้วแนบ `"buttons":{"a":true/false,"b":true/false}` เข้าไปในแพ็กเก็ต telemetry ที่ POST ไป `/api/telemetry` ทุก 100ms อยู่แล้ว ฝั่งเว็บ (`telemetryStore.ts` → SSE `/api/telemetry/stream` → `telemetry.svelte.ts` → `workout.svelte.ts` `handleRemoteButton()`) จะแปลงเป็น action เดียวกับที่ปุ่มบนหน้าเว็บทำ:
