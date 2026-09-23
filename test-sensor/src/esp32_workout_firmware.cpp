@@ -448,6 +448,22 @@ void updateLcd(unsigned long now, bool setActive, unsigned long setStartMs, unsi
   }
 }
 
+// Watchdog initialization helper supporting both ESP32 Arduino Core 2.x and 3.x (ESP-IDF v5)
+void initWatchdog() {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = (uint32_t)(WATCHDOG_TIMEOUT_S * 1000),
+    .idle_core_mask = 0,
+    .trigger_panic = true,
+  };
+  if (esp_task_wdt_init(&twdt_config) != ESP_OK) {
+    esp_task_wdt_reconfigure(&twdt_config);
+  }
+#else
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true);
+#endif
+}
+
 // Reached from ControlTask's long-idle check. Tears down WiFi + the task
 // watchdog first (its hardware timer keeps counting through the sleep, so
 // leaving tasks subscribed would false-panic on wake), arms wake sources,
@@ -486,7 +502,7 @@ void enterLightSleepUntilWake() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   Serial.printf("[POWER] Woke from light sleep (cause=%d), resubscribing watchdog + reconnecting WiFi...\n", (int)cause);
 
-  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true);
+  initWatchdog();
   esp_task_wdt_add(sensorTaskHandle);
   esp_task_wdt_add(networkTaskHandle);
   esp_task_wdt_add(lcdTaskHandle);
@@ -844,7 +860,7 @@ void setup() {
 
   shared.lastActivityMs = millis(); // don't start the idle/sleep clock before boot even finishes
 
-  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); // panic+reboot if a subscribed task goes silent
+  initWatchdog(); // panic+reboot if a subscribed task goes silent
 
   // Both button pins configured in ONE gpio_config() call via the bitmask
   // BUTTON_PIN_BIT_MASK, instead of two pinMode()+attachInterrupt() calls.
@@ -860,13 +876,19 @@ void setup() {
   gpio_isr_handler_add((gpio_num_t)BUTTON_A_PIN, buttonA_isr, nullptr);
   gpio_isr_handler_add((gpio_num_t)BUTTON_B_PIN, buttonB_isr, nullptr);
 
-  // Hardware timer 0, 80MHz/80 prescaler = 1MHz tick (1us resolution),
-  // replacing the old millis()-gate with a real timer/counter driving
-  // SensorTask's cadence. Edge/autoreload picked from SAMPLE_TIMER_CONFIG_MASK.
+  // Hardware timer driving SensorTask's cadence.
+  // Compatible with ESP32 Arduino Core 2.x and Core 3.x (ESP-IDF v5 timer API).
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  sampleTimer = timerBegin(1000000); // 1MHz tick = 1us resolution
+  timerAttachInterrupt(sampleTimer, &onSampleTimer);
+  timerAlarm(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0, 0);
+  timerStart(sampleTimer);
+#else
   sampleTimer = timerBegin(0, 80, true);
   timerAttachInterrupt(sampleTimer, &onSampleTimer, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_EDGE_INTERRUPT) != 0);
   timerAlarmWrite(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0);
   timerAlarmEnable(sampleTimer);
+#endif
 
   xTaskCreatePinnedToCore(sensorTask,  "SensorTask",  4096, nullptr, 3, &sensorTaskHandle,  1);
   xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, nullptr, 2, &networkTaskHandle, 0);

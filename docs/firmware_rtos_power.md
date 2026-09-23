@@ -79,14 +79,22 @@ bytes), Flash 65.0%** (จาก `pio run -e esp32_wifi_buttons`)
 #define TIMER_CFG_AUTORELOAD     (1 << 1) // 1 = alarm auto-reloads (periodic), 0 = one-shot
 const uint8_t SAMPLE_TIMER_CONFIG_MASK = TIMER_CFG_EDGE_INTERRUPT | TIMER_CFG_AUTORELOAD;
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+sampleTimer = timerBegin(1000000); // 1MHz tick = 1us resolution
+timerAttachInterrupt(sampleTimer, &onSampleTimer);
+timerAlarm(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0, 0);
+timerStart(sampleTimer);
+#else
 sampleTimer = timerBegin(0, 80, true); // timer 0, 80MHz/80 = 1MHz tick (1us resolution)
 timerAttachInterrupt(sampleTimer, &onSampleTimer, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_EDGE_INTERRUPT) != 0);
 timerAlarmWrite(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0);
 timerAlarmEnable(sampleTimer);
+#endif
 ```
 
 พฤติกรรมของ timer (edge-triggered หรือ level-triggered, one-shot หรือ autoreload) มาจากการเช็ค
-บิตใน `SAMPLE_TIMER_CONFIG_MASK` แทนที่จะ hardcode ค่า `true`/`false` ตรงๆ ที่จุดเรียกใช้ —
+บิตใน `SAMPLE_TIMER_CONFIG_MASK` แทนที่จะ hardcode ค่า `true`/`false` ตรงๆ ที่จุดเรียกใช้ — รองรับทั้ง ESP32 Core 2.x และ Core 3.x (ESP-IDF v5)
+เปลี่ยนพฤติกรรมได้แค่แก้ค่าคงที่จุดเดียว `onSampleTimer()` (ISR) ทำแค่ `xSemaphoreGiveFromISR()` —
 เปลี่ยนพฤติกรรมได้แค่แก้ค่าคงที่จุดเดียว `onSampleTimer()` (ISR) ทำแค่ `xSemaphoreGiveFromISR()` —
 งานหนักทั้งหมดอยู่ใน `SensorTask` ที่ตื่นมาทำงานเมื่อ semaphore มา นี่คือส่วนที่แทนที่การเทียบ
 `millis()` แบบเดิมด้วย hardware timer/counter จริง
@@ -125,7 +133,8 @@ contact bounce แล้วไม่ทำอะไรต่อ — ถ้าผ
 ### Watchdog Timer
 
 ```cpp
-esp_task_wdt_init(WATCHDOG_TIMEOUT_S /* = 5 */, true /* panic = reboot */);
+// รองรับทั้ง ESP32 Core 2.x และ Core 3.x (ESP-IDF v5 ใช้ esp_task_wdt_config_t)
+initWatchdog(); // panic+reboot if a subscribed task goes silent
 esp_task_wdt_add(sensorTaskHandle);
 esp_task_wdt_add(networkTaskHandle);
 esp_task_wdt_add(lcdTaskHandle);
