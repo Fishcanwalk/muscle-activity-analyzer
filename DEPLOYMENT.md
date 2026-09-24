@@ -203,8 +203,9 @@ PUBLIC_APP_TITLE=Cyberpump
 # URL ที่ Frontend คุยกับ Backend (ภายใน Docker ใช้ชื่อ service 'backend')
 BACKEND_API_URL=http://backend:9000
 
-# ORIGIN ของเว็บสำหรับป้องกัน CSRF (ใส่ IP หรือ Domain ของ Cloud Server)
-# ตัวอย่าง: http://203.0.113.10:3000 หรือ https://cyberpump.yourdomain.com
+# ORIGIN ภายนอกที่ผู้ใช้เปิดจริง สำหรับป้องกัน CSRF
+# ใส่เฉพาะ scheme + host (+ port ถ้ามี) เช่น https://cyberpump.yourdomain.com
+# ถ้า deploy บน Cloud Run ให้ใช้ URL ของ service หรือ custom domain ที่เปิดใน browser
 ORIGIN=http://<YOUR_SERVER_PUBLIC_IP>:3000
 ```
 
@@ -390,12 +391,21 @@ docker compose down
 ## 9. การแก้ไขปัญหาที่พบบ่อย (Troubleshooting)
 
 ### 1. Cross-site POST form submissions are forbidden (403 ใน SvelteKit)
-- **สาเหตุ**: SvelteKit มีระบบป้องกัน CSRF ในตัว หากค่า `ORIGIN` ใน `.env` ไม่ตรงกับ URL ที่เปิดในเบราว์เซอร์
-- **วิธีแก้**: แก้ไขค่า `ORIGIN` ใน `.env` ให้ตรงกับ IP หรือ Domain ที่ใช้งานจริง เช่น:
-  ```env
-  ORIGIN=http://203.0.113.15:3000
+- **สาเหตุ**: SvelteKit ปฏิเสธ form POST เมื่อ origin ที่ server คำนวณได้ไม่ตรงกับ `Origin` ของ request เช่น staging เปิดผ่าน HTTPS บน GCP แต่ `ORIGIN` ยังเป็น `http://localhost:3000` หรือเป็น host คนละตัว
+- **วิธีแก้สำหรับ Cloud Run**: ตั้ง environment variable `ORIGIN` ของ service ให้เป็น URL ที่ผู้ใช้เปิดจริง (มี `https://` และ hostname ตรงกัน; ไม่ใส่ path) แล้ว deploy revision ใหม่ เช่น:
+  ```bash
+  gcloud run services update <SERVICE> \
+    --region <REGION> \
+    --update-env-vars ORIGIN=https://<SERVICE>-<HASH>-<REGION>.a.run.app
   ```
-  จากนั้นสั่ง `docker compose up -d`
+  ถ้าเข้าเว็บผ่าน custom domain ให้ใช้ custom domain นั้นแทน URL ของ `run.app`. สำหรับ Docker Compose ให้แก้ `.env` ที่ root ของโปรเจกต์แล้ว recreate frontend:
+  ```env
+  ORIGIN=https://staging.example.com
+  ```
+  ```bash
+  docker compose up -d --force-recreate frontend
+  ```
+- อย่าปิด `csrf.checkOrigin` เพื่อแก้ปัญหานี้. `adapter-node` ยังรองรับ `PROTOCOL_HEADER=x-forwarded-proto` และ `HOST_HEADER=x-forwarded-host` เมื่ออยู่หลัง trusted proxy; หากใช้ค่านี้ ต้องแน่ใจว่าแอปเข้าถึงได้ผ่าน proxy ที่เชื่อถือได้เท่านั้น.
 
 ### 2. Build Frontend ไม่ผ่าน หรือเซิร์ฟเวอร์ค้าง (Out of Memory)
 - **สาเหตุ**: การ build SvelteKit และ Vite ใช้ Memory สูง หาก Cloud VM มี RAM เพียง 1GB - 2GB อาจเกิด OOM Kill
