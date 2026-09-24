@@ -266,7 +266,17 @@ server {
     listen 80;
     server_name your-domain.com; # หรือใส่ IP Server หากยังไม่มีโดเมน
 
-    # Frontend Web Application & Telemetry Ingest
+    # 1. Backend FastAPI endpoints & Swagger Docs
+    location ~ ^/(health|docs|openapi.json|v1/|users/) {
+        proxy_pass http://127.0.0.1:9000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 2. Frontend Web Application & Telemetry Ingest
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -277,17 +287,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Direct Backend API docs (Swagger UI) - Optional
-    location /docs {
-        proxy_pass http://127.0.0.1:9000/docs;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    location /openapi.json {
-        proxy_pass http://127.0.0.1:9000/openapi.json;
-        proxy_set_header Host $host;
     }
 }
 ```
