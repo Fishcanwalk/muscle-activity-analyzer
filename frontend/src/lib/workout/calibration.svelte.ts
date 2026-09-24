@@ -23,15 +23,17 @@ class CalibrationManager {
 		wifiRssi: '-58 dBm (Strong)'
 	});
 
-	private async postCalibration(body: Record<string, number>) {
+	private async postCalibration(body: Record<string, number>): Promise<boolean> {
 		try {
-			await fetch('/api/calibration', {
+			const res = await fetch('/api/calibration', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(body)
 			});
+			return res.ok;
 		} catch {
 			// Server unreachable (e.g. offline dev preview); keep the local value so the UI still works.
+			return false;
 		}
 	}
 
@@ -50,24 +52,33 @@ class CalibrationManager {
 		}
 	}
 
+	private postCurrentCalibration() {
+		return this.postCalibration({
+			emgBaseline: this.emgZeroOffsetUv,
+			emgMvc: this.emgMvcPeakUv,
+			fsrZero: this.fsrZeroAdc,
+			fsrMax: this.fsrMaxGripAdc
+		});
+	}
+
 	calibrateEmgZero(val = 14) {
 		this.emgZeroOffsetUv = val;
-		this.postCalibration({ emgBaseline: val });
+		return this.postCurrentCalibration();
 	}
 
 	calibrateEmgMvc(val = 580) {
 		this.emgMvcPeakUv = val;
-		this.postCalibration({ emgMvc: val });
+		return this.postCurrentCalibration();
 	}
 
 	calibrateFsrZero(val = 10) {
 		this.fsrZeroAdc = val;
-		this.postCalibration({ fsrZero: val });
+		return this.postCurrentCalibration();
 	}
 
 	calibrateFsrMax(val = 3900) {
 		this.fsrMaxGripAdc = val;
-		this.postCalibration({ fsrMax: val });
+		return this.postCurrentCalibration();
 	}
 
 	setTorsoLimit(deg: number) {

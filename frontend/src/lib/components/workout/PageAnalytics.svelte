@@ -71,7 +71,7 @@
 							yAxisID: 'y'
 						},
 						{
-							label: 'Peak sEMG RMS (µV)',
+							label: 'ออกแรงกล้ามเนื้อสูงสุด (%)',
 							data: emgData,
 							borderColor: '#a855f7',
 							backgroundColor: 'transparent',
@@ -154,7 +154,7 @@
 	<div class="rounded-xl border border-border bg-card p-6 shadow-md">
 		<span class="text-xs font-bold text-cyan-400 uppercase">Session-to-Session Comparison</span>
 		<h3 class="mt-1 text-lg font-bold text-foreground">
-			🧬 การเปรียบเทียบเซสชัน: {history.comparison.previousDate} VS {history.comparison.currentDate}
+			🧬 การเปรียบเทียบเซสชัน: {history.comparison.previousDate} VS {history.comparison.currentDate} (วันนี้)
 		</h3>
 
 		<div class="mt-4 overflow-x-auto">
@@ -202,9 +202,9 @@
 		</div>
 
 		<div class="rounded-xl border border-border bg-card p-5 shadow-md">
-			<span class="text-xs font-bold text-cyan-400 uppercase">Kinematics & Electrophysiology</span>
+			<span class="text-xs font-bold text-cyan-400 uppercase">มุมข้อศอก & การออกแรงกล้ามเนื้อ</span>
 			<h3 class="mt-1 text-base font-bold text-foreground">
-				📊 ROM Expansion & Neural Drive (sEMG RMS)
+				📊 ช่วงการเคลื่อนไหว (ROM) & แรงกล้ามเนื้อ
 			</h3>
 			<div class="relative mt-4 h-64 w-full">
 				<canvas bind:this={romCanvas}></canvas>

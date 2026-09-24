@@ -24,12 +24,14 @@ export interface UserProfile {
 		maxCleanReps: number;
 		highestVolumeKg: number;
 		longestTutSec: number;
-		peakEmgUv: number;
+		/** % of the user's calibrated MVC, not the raw µV the sensor/backend use internally. */
+		peakEmgPercent: number;
 		bestRomDeg: number;
 		lowestCheatPercent: number;
 	};
 	weeklyVolume: { week: string; clean: number; cheated: number }[];
-	formProgression: { session: string; purity: number; rom: number; emg: number }[];
+	/** emgPercent: % of calibrated MVC, not raw µV. */
+	formProgression: { session: string; purity: number; rom: number; emgPercent: number }[];
 	historyLogs: {
 		id: string;
 		date: string;

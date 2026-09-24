@@ -3,7 +3,7 @@
 	import { workout, type SessionSummary } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec } from '$lib/utils/format';
-	import { Timer, ArrowRight, Save, CheckCircle2, AlertTriangle, Flag } from 'lucide-svelte';
+	import { Timer, ArrowRight, CheckCircle2, AlertTriangle, Flag } from 'lucide-svelte';
 
 	interface Props {
 		onStartNextSet: () => void;
@@ -143,28 +143,30 @@
 		if (restTimer) clearInterval(restTimer);
 	});
 
-	function handleNextSet() {
+	// Two actions only, both of which now actually persist data (previously a
+	// separate "บันทึกผลเซสชันวันนี้" button was the only thing that saved to the
+	// backend, so a lifter who forgot to click it before ending lost that set):
+	// starting the next set silently saves the one that just finished, and ending
+	// the workout saves whatever hasn't been saved yet before aggregating.
+	let isBusy = $state(false);
+
+	async function handleNextSet() {
+		isBusy = true;
+		await workout.saveSummary(currentSummary, { silent: true });
+		isBusy = false;
 		workout.nextSet();
 		onStartNextSet();
 	}
 
-	let isSaving = $state(false);
-
-	async function handleSaveSession() {
-		isSaving = true;
-		await workout.saveSummary(currentSummary);
-		isSaving = false;
-		onFinishSession();
-	}
-
-	// "จบการออกกำลังกาย" is a separate, additive action from saving a single set
-	// above -- it aggregates every set completed this workout (workout.endWorkout())
-	// and renders the result in place, rather than immediately switching tabs, so
-	// the lifter sees the session-wide numbers before moving on.
+	// Renders the session-wide numbers in place (rather than immediately switching
+	// tabs) so the lifter sees them before moving on -- see handleCloseSummary.
 	let sessionSummary = $state<SessionSummary | null>(null);
 
-	function handleEndWorkout() {
+	async function handleEndWorkout() {
+		isBusy = true;
+		await workout.saveAllPendingSets();
 		sessionSummary = workout.endWorkout();
+		isBusy = false;
 	}
 
 	function handleCloseSummary() {
@@ -195,25 +197,19 @@
 		<div class="flex flex-wrap gap-3">
 			<button
 				onclick={handleNextSet}
-				class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400"
+				disabled={isBusy}
+				class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 disabled:opacity-50"
 			>
-				<span>เริ่มเซตถัดไป (Set #{currentSummary.setNumber + 1})</span>
+				<span>{isBusy ? 'กำลังบันทึก...' : `เริ่มเซตถัดไป (Set #${currentSummary.setNumber + 1})`}</span>
 				<ArrowRight class="h-4 w-4" />
 			</button>
 			<button
-				onclick={handleSaveSession}
-				disabled={isSaving}
-				class="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 font-semibold text-foreground hover:border-cyan-500 disabled:opacity-50"
-			>
-				<Save class="h-4 w-4" />
-				<span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกผลเซสชันวันนี้'}</span>
-			</button>
-			<button
 				onclick={handleEndWorkout}
-				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-400 hover:bg-rose-500/20"
+				disabled={isBusy}
+				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-400 hover:bg-rose-500/20 disabled:opacity-50"
 			>
 				<Flag class="h-4 w-4" />
-				<span>จบการออกกำลังกาย</span>
+				<span>{isBusy ? 'กำลังบันทึก...' : 'บันทึกผลและจบการออกกำลังกาย'}</span>
 			</button>
 		</div>
 	</div>
@@ -306,7 +302,7 @@
 						<div class="text-xl font-black text-foreground">
 							{currentSummary.highTensionTutSeconds} <span class="text-xs font-normal text-muted-foreground">s</span>
 						</div>
-						<span class="text-xs text-muted-foreground">Zone > 280 µV</span>
+						<span class="text-xs text-muted-foreground">ช่วงเวลาที่ออกแรงหนัก</span>
 					</div>
 
 					<div class="rounded-lg border border-border bg-background/50 p-3">

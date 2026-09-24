@@ -5,36 +5,38 @@
 	import { CheckCircle2, Sliders, Cpu, Activity } from 'lucide-svelte';
 
 	let calMsg = $state('');
+	let calMsgOk = $state(true);
 
 	onMount(() => {
 		calibration.loadFromServer();
 	});
 
-	function flashMsg(msg: string) {
+	function flashMsg(msg: string, ok: boolean) {
 		calMsg = msg;
+		calMsgOk = ok;
 		setTimeout(() => {
 			calMsg = '';
 		}, 3000);
 	}
 
-	function handleCalibrateEmgZero() {
-		calibration.calibrateEmgZero(telemetry.emg.rms || 14);
-		flashMsg('✅ บันทึก sEMG Rest Baseline สำเร็จ');
+	async function handleCalibrateEmgZero() {
+		const ok = await calibration.calibrateEmgZero(telemetry.emg.rms || 14);
+		flashMsg(ok ? '✅ บันทึกจุดพักกล้ามเนื้อสำเร็จ' : '⚠️ บันทึกจุดพักกล้ามเนื้อไม่สำเร็จ', ok);
 	}
 
-	function handleCalibrateEmgMvc() {
-		calibration.calibrateEmgMvc(620);
-		flashMsg('✅ บันทึก sEMG MVC Peak สำเร็จ (620 µV)');
+	async function handleCalibrateEmgMvc() {
+		const ok = await calibration.calibrateEmgMvc(620);
+		flashMsg(ok ? '✅ บันทึกจุดออกแรงสูงสุดสำเร็จ' : '⚠️ บันทึกจุดออกแรงสูงสุดไม่สำเร็จ', ok);
 	}
 
-	function handleCalibrateFsrZero() {
-		calibration.calibrateFsrZero(10);
-		flashMsg('✅ ตั้งค่า FSR Zero Load สำเร็จ');
+	async function handleCalibrateFsrZero() {
+		const ok = await calibration.calibrateFsrZero(10);
+		flashMsg(ok ? '✅ บันทึกจุดไม่มีแรงกดสำเร็จ' : '⚠️ บันทึกจุดไม่มีแรงกดไม่สำเร็จ', ok);
 	}
 
-	function handleCalibrateFsrMax() {
-		calibration.calibrateFsrMax(3950);
-		flashMsg('✅ บันทึก FSR Max Grip Strength สำเร็จ');
+	async function handleCalibrateFsrMax() {
+		const ok = await calibration.calibrateFsrMax(3950);
+		flashMsg(ok ? '✅ บันทึกแรงบีบสูงสุดสำเร็จ' : '⚠️ บันทึกแรงบีบสูงสุดไม่สำเร็จ', ok);
 	}
 </script>
 
@@ -42,7 +44,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-4">
 		<div>
 			<h2 class="text-2xl font-black tracking-tight text-foreground">
-				5. Sensor Calibration & System Diagnostics
+				5. ปรับเทียบเซนเซอร์ & ตรวจสอบระบบ
 			</h2>
 			<p class="text-sm text-muted-foreground">
 				ปรับเทียบค่าเริ่มต้น (Zero & MVC) ของเซ็นเซอร์แต่ละตัว เพื่อความแม่นยำสูงสุดตามสรีระผู้ใช้
@@ -51,7 +53,12 @@
 
 		{#if calMsg}
 			<div
-				class="animate-in fade-in slide-in-from-top-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-4 py-2 text-xs font-bold text-emerald-400 shadow-md"
+				class={[
+					'animate-in fade-in slide-in-from-top-1 rounded-lg border px-4 py-2 text-xs font-bold shadow-md',
+					calMsgOk
+						? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-400'
+						: 'border-red-500/50 bg-red-500/15 text-red-400'
+				]}
 			>
 				{calMsg}
 			</div>
@@ -61,36 +68,36 @@
 	<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
 		<!-- sEMG Calibration -->
 		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<span class="text-xs font-bold text-cyan-400 uppercase">sEMG Sensor (Arduino Uno A0)</span>
-			<h3 class="mt-1 text-lg font-bold text-foreground">1. sEMG Baseline & MVC Calibration</h3>
+			<span class="text-xs font-bold text-cyan-400 uppercase">เซนเซอร์วัดคลื่นกล้ามเนื้อ</span>
+			<h3 class="mt-1 text-lg font-bold text-foreground">1. ปรับเทียบระดับพัก & ระดับออกแรงสูงสุด</h3>
 			<p class="mt-2 text-xs text-muted-foreground leading-relaxed">
-				ตั้งค่าจุดพักกล้ามเนื้อ (Rest Baseline) และแรงเกร็งสูงสุด (Maximum Voluntary Contraction: MVC) เพื่อคำนวณ % การสั่งการกล้ามเนื้อ (Recruitment Rate)
+				บันทึกระดับสัญญาณตอนกล้ามเนื้อพัก และตอนออกแรงเกร็งสุดแรง เพื่อให้ระบบคำนวณ "% การออกแรง" ระหว่างเล่นได้แม่นยำตามร่างกายของคุณ
 			</p>
 
 			<div class="mt-4 grid grid-cols-2 gap-4">
 				<div class="flex flex-col items-center rounded-lg border border-border bg-background/50 p-4 text-center">
-					<span class="text-xs text-muted-foreground">Rest Baseline (พักแขน)</span>
-					<div class="my-2 text-xl font-black text-foreground">
-						{calibration.emgZeroOffsetUv} <span class="text-xs font-normal">µV</span>
-					</div>
+					<span class="text-xs text-muted-foreground">จุดพัก (ผ่อนคลายแขน)</span>
+					<div class="my-2 text-xl font-black text-foreground">✓</div>
+					<span class="text-[10px] text-muted-foreground/70">ค่าอ้างอิง: {calibration.emgZeroOffsetUv}</span>
+					<p class="mt-2 text-[10px] text-muted-foreground leading-relaxed">ผ่อนคลายแขนให้สุด ไม่ออกแรงเลย แล้วกดปุ่ม</p>
 					<button
 						onclick={handleCalibrateEmgZero}
-						class="w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
+						class="mt-2 w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
 					>
-						Calibrate Zero
+						บันทึกจุดพัก
 					</button>
 				</div>
 
 				<div class="flex flex-col items-center rounded-lg border border-border bg-background/50 p-4 text-center">
-					<span class="text-xs text-muted-foreground">Peak MVC (เกร็งสุดแรง)</span>
-					<div class="my-2 text-xl font-black text-emerald-400">
-						{calibration.emgMvcPeakUv} <span class="text-xs font-normal">µV</span>
-					</div>
+					<span class="text-xs text-muted-foreground">จุดออกแรงสูงสุด (เกร็งสุดแรง)</span>
+					<div class="my-2 text-xl font-black text-emerald-400">✓</div>
+					<span class="text-[10px] text-muted-foreground/70">ค่าอ้างอิง: {calibration.emgMvcPeakUv}</span>
+					<p class="mt-2 text-[10px] text-muted-foreground leading-relaxed">เกร็งกล้ามเนื้อให้แรงที่สุดเท่าที่ทำได้ แล้วกดปุ่ม</p>
 					<button
 						onclick={handleCalibrateEmgMvc}
-						class="w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
+						class="mt-2 w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
 					>
-						Calibrate MVC
+						บันทึกจุดออกแรงสูงสุด
 					</button>
 				</div>
 			</div>
@@ -98,36 +105,36 @@
 
 		<!-- FSR Calibration -->
 		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<span class="text-xs font-bold text-cyan-400 uppercase">FSR Resistor (Arduino Uno A2)</span>
-			<h3 class="mt-1 text-lg font-bold text-foreground">2. FSR Grip Thresholds</h3>
+			<span class="text-xs font-bold text-cyan-400 uppercase">เซนเซอร์วัดแรงบีบมือ</span>
+			<h3 class="mt-1 text-lg font-bold text-foreground">2. ปรับเทียบแรงบีบมือ</h3>
 			<p class="mt-2 text-xs text-muted-foreground leading-relaxed">
-				สอบเทียบแรงกดของมือจับเพื่อตรวจจับ Grip Slippage และคำนวณ CNS Freshness ได้อย่างแม่นยำ
+				สอบเทียบแรงกดของมือจับเพื่อตรวจจับการจับหลุด (Grip Slippage) และวัดความสดของกล้ามเนื้อได้แม่นยำขึ้น
 			</p>
 
 			<div class="mt-4 grid grid-cols-2 gap-4">
 				<div class="flex flex-col items-center rounded-lg border border-border bg-background/50 p-4 text-center">
-					<span class="text-xs text-muted-foreground">Zero Load (ปล่อยมือ)</span>
-					<div class="my-2 text-xl font-black text-foreground">
-						{calibration.fsrZeroAdc} <span class="text-xs font-normal">ADC</span>
-					</div>
+					<span class="text-xs text-muted-foreground">ไม่มีแรงกด (ปล่อยมือ)</span>
+					<div class="my-2 text-xl font-black text-foreground">✓</div>
+					<span class="text-[10px] text-muted-foreground/70">ค่าอ้างอิง: {calibration.fsrZeroAdc}</span>
+					<p class="mt-2 text-[10px] text-muted-foreground leading-relaxed">ปล่อยมือจากเซนเซอร์ ไม่แตะเลย แล้วกดปุ่ม</p>
 					<button
 						onclick={handleCalibrateFsrZero}
-						class="w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
+						class="mt-2 w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
 					>
-						Set Zero ADC
+						บันทึกจุดไม่มีแรงกด
 					</button>
 				</div>
 
 				<div class="flex flex-col items-center rounded-lg border border-border bg-background/50 p-4 text-center">
-					<span class="text-xs text-muted-foreground">Max Grip ADC</span>
-					<div class="my-2 text-xl font-black text-cyan-400">
-						{calibration.fsrMaxGripAdc} <span class="text-xs font-normal">ADC</span>
-					</div>
+					<span class="text-xs text-muted-foreground">แรงบีบสูงสุด</span>
+					<div class="my-2 text-xl font-black text-cyan-400">✓</div>
+					<span class="text-[10px] text-muted-foreground/70">ค่าอ้างอิง: {calibration.fsrMaxGripAdc}</span>
+					<p class="mt-2 text-[10px] text-muted-foreground leading-relaxed">บีบเซนเซอร์ให้แรงที่สุดเท่าที่ทำได้ แล้วกดปุ่ม</p>
 					<button
 						onclick={handleCalibrateFsrMax}
-						class="w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
+						class="mt-2 w-full rounded border border-cyan-500/50 bg-card py-1.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/10"
 					>
-						Set Max ADC
+						บันทึกแรงบีบสูงสุด
 					</button>
 				</div>
 			</div>
@@ -135,8 +142,8 @@
 
 		<!-- MediaPipe Sensitivity -->
 		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<span class="text-xs font-bold text-cyan-400 uppercase">Computer Vision Parameters</span>
-			<h3 class="mt-1 text-lg font-bold text-foreground">3. MediaPipe Anti-Cheat Sensitivity</h3>
+			<span class="text-xs font-bold text-cyan-400 uppercase">ความไวของกล้องตรวจจับท่าทาง</span>
+			<h3 class="mt-1 text-lg font-bold text-foreground">3. ความไวการตรวจจับท่าทางผิดปกติ</h3>
 			<p class="mt-2 text-xs text-muted-foreground leading-relaxed">
 				กำหนดเกณฑ์ความอ่อนไหวในการตัดคะแนนเมื่อตรวจพบการใช้แรงเหวี่ยงตัวหรือการยกไหล่ช่วย
 			</p>
@@ -184,8 +191,8 @@
 
 		<!-- Diagnostics Table -->
 		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<span class="text-xs font-bold text-cyan-400 uppercase">System Architecture Status</span>
-			<h3 class="mt-1 text-lg font-bold text-foreground">4. Dual-MCU & Sensor Diagnostics</h3>
+			<span class="text-xs font-bold text-cyan-400 uppercase">สถานะระบบ</span>
+			<h3 class="mt-1 text-lg font-bold text-foreground">4. ตรวจสอบสถานะฮาร์ดแวร์</h3>
 
 			<div class="mt-4 overflow-hidden rounded-lg border border-border">
 				<table class="w-full text-left text-xs">

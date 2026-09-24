@@ -3,8 +3,10 @@
 	import { workout } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { calibration } from '$lib/workout/calibration.svelte';
+	import { cameraRepCounter } from '$lib/workout/cameraRepCounter.svelte';
 	import EmgGraphMonitor from './EmgGraphMonitor.svelte';
 	import BiofeedbackSensors from './BiofeedbackSensors.svelte';
+	import CameraMotionPanel from './CameraMotionPanel.svelte';
 	import RecordingControls from './RecordingControls.svelte';
 	import { formatDec } from '$lib/utils/format';
 	import { Camera, ArrowClockwise, WarningCircle, Play, Stop, X } from 'phosphor-svelte';
@@ -78,6 +80,7 @@
 			modelErrorMsg = '';
 
 			await ensureMediaPipeScripts();
+			cameraRepCounter.start(); // independent OpenCV.js motion counter -- doesn't block MediaPipe readiness
 
 			let attempts = 0;
 			while ((!(window as any).Pose || !(window as any).Camera) && attempts < 30) {
@@ -107,6 +110,7 @@
 				onFrame: async () => {
 					if (isWebcamActive && videoElement && poseInstance) {
 						await poseInstance.send({ image: videoElement });
+						cameraRepCounter.processFrame(videoElement); // shares this same frame/stream, no second getUserMedia
 					}
 				},
 				width: 640,
@@ -127,6 +131,7 @@
 	}
 
 	function stopWebcam() {
+		cameraRepCounter.stop();
 		if (cameraInstance) {
 			try {
 				cameraInstance.stop();
@@ -566,6 +571,11 @@
 		<div class="flex flex-col">
 			<!-- sEMG High-Clarity Monitor & Real-Time Oscilloscope -->
 			<EmgGraphMonitor />
+
+			<!-- OpenCV.js motion-based rep counter -- cross-check vs. MediaPipe -->
+			<div class="mt-5">
+				<CameraMotionPanel />
+			</div>
 
 			<!-- VBT Velocity & FSR Vitals Sensors -->
 		</div>

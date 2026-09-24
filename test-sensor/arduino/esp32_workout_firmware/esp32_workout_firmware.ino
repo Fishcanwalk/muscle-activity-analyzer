@@ -8,61 +8,45 @@
 #include <LiquidCrystal_I2C.h>
 #include "board_config.h"
 
-// Two push-buttons, wired to GND with internal pull-up (pressed = LOW).
-// See PINS.md at the project root for the wiring diagram.
-// Button A drives the web app's Start/Stop-set toggle (and "start next set" on
-// the 3rd press); Button B stops the current set (if running) and saves the
-// session -- see workout.svelte.ts `handleRemoteButton()` on the frontend.
+// FreeRTOS/ESP-IDF power-management APIs. This firmware runs as 4 pinned
+// FreeRTOS tasks (SensorTask/NetworkTask/LcdTask/ControlTask) instead of one
+// polling loop() -- see docs/firmware_rtos_power.md for the full design.
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <esp_task_wdt.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include <esp_system.h>
+#include <driver/gpio.h>
+
+// Two buttons, INPUT_PULLUP (pressed = LOW). See PINS.md for wiring.
+// A = start/stop set toggle, B = stop + save session (see
+// workout.svelte.ts `handleRemoteButton()`). GPIO-interrupt-driven; Button A
+// also wakes the chip from light sleep.
 #define BUTTON_A_PIN 32
 #define BUTTON_B_PIN 33
-#define BUTTON_DEBOUNCE_MS 250 // ignores contact bounce / accidental double-taps
+const uint64_t BUTTON_DEBOUNCE_US = 250000ULL; // 250ms debounce, checked in the ISR
 
 // Buzzer: warns when grip force (FSR) drops too low during an active set.
-// GPIO 25 is free (not I2C/ADC1/button), and works as a plain digital output
-// regardless of WiFi (the ADC2-vs-WiFi conflict only affects analogRead).
 #define BUZZER_PIN 25
 const int FSR_LOW_FORCE_THRESHOLD = 300;    // ADC counts (0-4095); below this = "losing grip"
 const int FSR_LOW_FORCE_HYSTERESIS = 50;    // must rise above threshold+this to clear the alert
 const float FSR_STABILITY_ALERT_THRESHOLD = 70.0f; // % from computeFsrStability(); below this = "not steady"
 const unsigned long BUZZER_BEEP_INTERVAL_MS = 150; // on/off toggle period while alerting
 const unsigned long BUZZER_ALERT_DELAY_MS = 3000;  // must stay flagged this long before it sounds
-bool buzzerOn = false;
-unsigned long buzzerLastToggleMs = 0;
-unsigned long fsrAlertConditionSinceMs = 0; // 0 = condition not currently met
 
-bool buttonAPressed = false;
-bool buttonBPressed = false;
-bool buttonALastLevel = false; // debounced level from the previous fast-sample tick
-bool buttonBLastLevel = false;
-unsigned long buttonALastEdgeMs = 0;
-unsigned long buttonBLastEdgeMs = 0;
-bool buttonAEvent = false; // latched "pressed since last network send", cleared after POST
-bool buttonBEvent = false;
-
-// 16x2 I2C LCD, same I2C bus as the MPU/MAX30102/MLX90614 (SDA=21, SCL=22).
-// 0x27 is the common PCF8574 backpack address; run the 01_i2c_scanner sketch
-// and change this if your module shows up at 0x3F instead.
+// 16x2 I2C LCD, same bus as MPU/MAX30102/MLX90614 (SDA=21, SCL=22). Run
+// 01_i2c_scanner if 0x27 isn't the right address.
 #define LCD_I2C_ADDR 0x27
 #define LCD_COLS     16
 #define LCD_ROWS     2
 LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
-// Local rep count shown on the LCD -- separate from the buttons above and from
-// the web app's rep counter (camera-driven); nothing increments this yet.
-int repCount = 0;
-
-// Local set timer shown on the LCD, driven purely by the button presses below --
-// rep count and elapsed time are display-only and are never sent to the web app
-// (see the `buttons` payload further down, which carries only discrete press events).
-bool setActive = false;
-unsigned long setStartMs = 0;
-unsigned long restStartMs = 0; // when the current rest period began (set stopped/reset)
-int setCount = 0; // increments each time a new set starts (button A), shown on line 1
-
-// MPU6050/6500-compatible raw driver.
-// Adafruit_MPU6050 hard-rejects any chip whose WHO_AM_I isn't exactly 0x68, but
-// this board's module is actually an MPU6500 (WHO_AM_I 0x70) -- register-compatible
-// with the MPU6050 for everything used here, so we talk to it directly instead.
+// MPU6050/6500-compatible raw driver -- talked to directly because this
+// board's chip is actually an MPU6500 (WHO_AM_I 0x70), which
+// Adafruit_MPU6050 rejects even though it's register-compatible.
 #define MPU_ADDR             0x68
 #define MPU_REG_WHO_AM_I     0x75
 #define MPU_REG_PWR_MGMT_1   0x6B
@@ -70,20 +54,219 @@ int setCount = 0; // increments each time a new set starts (button A), shown on 
 #define MPU_REG_ACCEL_CONFIG 0x1C
 #define MPU_REG_ACCEL_XOUT_H 0x3B
 
-// sEMG + FSR now come from an Arduino Uno over UART instead of this board's
-// own analogRead() -- see uno_emg_fsr_link.cpp and PINS.md for the wiring
-// and why the Uno rescales its 10-bit ADC up to these same 12-bit counts.
+// sEMG + FSR come from an Arduino Uno over UART (see uno_emg_fsr_link.cpp /
+// PINS.md), not this board's own analogRead().
 #define UNO_LINK_RX_PIN 16
 #define UNO_LINK_TX_PIN 17
 #define UNO_LINK_BAUD   9600
+
+// ----------------------------------------------------
+// ข้อมูลสำหรับล็อกอิน CoEIoT (WPA2-Personal)
+// ----------------------------------------------------
+const char* ssid     = "Nig";
+const char* password = "chicken123123";
+
+// IP คอมพิวเตอร์ของคุณ (ดูจากคำสั่ง hostname -I บนคอม)
+const char* serverUrl = "http://172.20.10.3:5173/api/telemetry";
+
+// ----------------------------------------------------
+// Sensor objects (see docs/sensor_usage.md for the 6-sensor fusion design)
+// ----------------------------------------------------
+MAX30105          max30102;
+Adafruit_MLX90614 mlx;
+
+// Persistent HTTP client, reused across POSTs to avoid a ~80-110ms TCP
+// handshake per send. Only touched from NetworkTask.
+WiFiClient httpClient;
+HTTPClient http;
+
+bool statusMpu = false;
+bool statusMax = false;
+bool statusMlx = false;
+
+// Sample sensors fast (100Hz, for waveform/integration fidelity) but POST at
+// a lower rate to cut WiFi overhead. SensorTask is paced by a hardware timer;
+// NetworkTask/LcdTask use vTaskDelayUntil().
+const unsigned long SAMPLE_INTERVAL_MS = 10;  // 100 Hz local sensor sampling
+const unsigned long SEND_INTERVAL_MS   = 250; // 4 Hz network send
+const unsigned long LCD_UPDATE_INTERVAL_MS = 200; // 5 Hz
+const unsigned long MLX_READ_INTERVAL_MS = 250;   // MLX90614 changes slowly
+const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000; // 1 Hz consolidated [SENSORS] log line
+
+// EMG samples, 100Hz producer (SensorTask) / 250ms consumer (NetworkTask).
+// Sized with 2x margin over the nominal 25 samples/cycle.
+const int EMG_QUEUE_LEN = 64;
+
+const unsigned long WATCHDOG_TIMEOUT_S = 5; // panic+reboot if a subscribed task is silent this long
+
+// Light sleep ("sleep mode" requirement): only after 5+ min of genuine idle
+// (no set ever started/reset, no button press) -- NOT during rest-between-sets,
+// since HR/EMG must sample continuously during an active workout (see
+// docs/sensor_usage.md). Set to 0 to disable if it's unstable with WiFi.
+#define ENABLE_LIGHT_SLEEP 1
+const unsigned long IDLE_SLEEP_TIMEOUT_MS = 5UL * 60UL * 1000UL; // 5 minutes fully idle
+const uint64_t IDLE_WAKE_KEEPALIVE_US = 5ULL * 1000000ULL; // periodic wake so we're never stuck asleep forever
+
+// Timer/interrupt/sleep behaviour is configured via bitmasks rather than
+// scattered booleans, matching how the underlying APIs already think in bits
+// (gpio_config_t.pin_bit_mask, esp_sleep_enable_*, timer edge/autoreload).
+#define WAKE_SRC_TIMER (1 << 0) // periodic keepalive wake (esp_sleep_enable_timer_wakeup)
+#define WAKE_SRC_EXT0  (1 << 1) // Button A wake (esp_sleep_enable_ext0_wakeup)
+const uint8_t SLEEP_WAKE_SOURCE_MASK = WAKE_SRC_TIMER | WAKE_SRC_EXT0;
+
+#define TIMER_CFG_EDGE_INTERRUPT (1 << 0) // 1 = edge-triggered ISR, 0 = level-triggered
+#define TIMER_CFG_AUTORELOAD     (1 << 1) // 1 = alarm auto-reloads (periodic), 0 = one-shot
+const uint8_t SAMPLE_TIMER_CONFIG_MASK = TIMER_CFG_EDGE_INTERRUPT | TIMER_CFG_AUTORELOAD;
+
+#define BUTTON_BIT_A (1ULL << BUTTON_A_PIN) // GPIO32
+#define BUTTON_BIT_B (1ULL << BUTTON_B_PIN) // GPIO33
+const uint64_t BUTTON_PIN_BIT_MASK = BUTTON_BIT_A | BUTTON_BIT_B; // gpio_config_t.pin_bit_mask
+
+// MPU-6050: pitch/roll + concentric velocity via leaky-integrated vertical
+// acceleration (simplified VBT estimate, not lab-grade). Owned exclusively by
+// SensorTask; only the published `shared` snapshot is visible to other tasks.
+const float GRAVITY_MSS = 9.80665f;
+const float VELOCITY_DECAY = 0.98f; // bleeds off drift each sample
+float velocity = 0.0f, mpuPitch = 0.0f, mpuRoll = 0.0f;
+float mpuAx = 0.0f, mpuAy = 0.0f, mpuAz = 0.0f;
+unsigned long lastMpuMicros = 0;
+
 int unoEmgVal = 0;
 int unoFsrForce = 0;
 unsigned long lastUnoRxMs = 0;
 bool unoLinkWasOk = false; // edge-detect so the log line only prints on change
 
-// Non-blocking line reader for the "emg,fsr\n" packets the Uno sends every
-// ~10ms. Called every loop() iteration (not gated by SAMPLE_INTERVAL_MS) so
-// the UART buffer never backs up between fast-sample ticks.
+// MAX30102: beat detection -> BPM
+const byte RATE_SIZE = 4;
+byte bpmRates[RATE_SIZE];
+byte bpmRateSpot = 0;
+long lastBeat = 0;
+int beatAvg = 0;
+const long FINGER_PRESENT_IR_THRESHOLD = 50000;
+
+// MAX30102: rough SpO2 estimate from a rolling Red/IR AC-DC ratio (not clinically accurate)
+const int SPO2_WINDOW_SAMPLES = 200; // ~2s at the 100Hz fast-sample rate
+int spo2SampleCount = 0;
+long irMin = 0, irMax = 0, redMin = 0, redMax = 0;
+float spo2Estimate = 98.0f;
+
+// MLX90614: temperature delta vs. the skin temp measured at boot
+float skinTempBaseline = 0.0f;
+float skinTemp = 0.0f, deltaTemp = 0.0f;
+unsigned long lastMlxReadMs = 0;
+unsigned long lastDebugPrintMs = 0;
+
+// FSR: grip stability (%) from the range of readings over a short rolling window
+const int FSR_WINDOW_SAMPLES = 20;
+int fsrHistory[FSR_WINDOW_SAMPLES];
+int fsrHistoryIdx = 0;
+bool fsrHistoryFull = false;
+
+// Buzzer/button state -- owned exclusively by ControlTask.
+bool buzzerOn = false;
+unsigned long buzzerLastToggleMs = 0;
+unsigned long fsrAlertConditionSinceMs = 0; // 0 = condition not currently met
+
+// One struct + one mutex for both the sensor snapshot (written by SensorTask)
+// and the workout/button state (written by ControlTask). Contention is low
+// enough that one mutex is simpler than several.
+struct SharedState {
+  // Sensor snapshot -- written by SensorTask, read by NetworkTask/ControlTask/LcdTask.
+  int fsrLatest = 0;
+  float fsrStability = 100.0f;
+  float mpuPitch = 0, mpuRoll = 0, velocity = 0;
+  float mpuAx = 0, mpuAy = 0, mpuAz = 0;
+  int beatAvg = 0;
+  float spo2Estimate = 98.0f;
+  float skinTemp = 0, deltaTemp = 0;
+
+  // Workout/button control state -- written by ControlTask, read by LcdTask/NetworkTask.
+  bool setActive = false;
+  unsigned long setStartMs = 0;
+  unsigned long restStartMs = 0;
+  int setCount = 0;
+  int repCount = 0; // local LCD-only counter; nothing increments this yet
+  bool buttonAEventPending = false; // latched "pressed since last network send"; NetworkTask clears it
+  bool buttonBEventPending = false;
+  unsigned long lastActivityMs = 0; // last button press, for the idle/light-sleep timer
+};
+SharedState shared;
+SemaphoreHandle_t stateMutex; // protects every field of `shared` above
+
+// TwoWire isn't safe to call from two tasks concurrently, and the I2C bus is
+// now touched from both SensorTask and LcdTask -- this mutex serializes it.
+SemaphoreHandle_t i2cMutex;
+
+QueueHandle_t emgQueue;         // int samples: SensorTask produces @100Hz, NetworkTask drains every 250ms
+QueueHandle_t buttonEventQueue; // uint8_t button ids (0=A, 1=B): ISRs produce, ControlTask consumes
+
+SemaphoreHandle_t sampleTickSemaphore; // given by the hardware timer ISR, taken by SensorTask
+hw_timer_t *sampleTimer = nullptr;
+
+TaskHandle_t sensorTaskHandle  = nullptr;
+TaskHandle_t networkTaskHandle = nullptr;
+TaskHandle_t lcdTaskHandle     = nullptr;
+TaskHandle_t controlTaskHandle = nullptr;
+
+void connectWiFi() {
+  Serial.println("\n[WiFi] Setting up connection for CoEIoT...");
+
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("[WiFi] Connecting to CoEIoT");
+  int retry = 0;
+  while (WiFi.status() != WL_CONNECTED && retry < 40) {
+    delay(500);
+    Serial.print(".");
+    retry++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n[WiFi] ✅ Connected to CoEIoT successfully!");
+    Serial.print("[WiFi] ESP32 IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n[WiFi] ❌ Failed to connect to CoEIoT. Please verify credentials.");
+  }
+}
+
+// ISRs must be short and IRAM-resident -- no I2C/Serial/delay(), just a
+// timestamp check and a hand-off into a queue/semaphore for the real task.
+void IRAM_ATTR onSampleTimer() {
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xSemaphoreGiveFromISR(sampleTickSemaphore, &xHigherPriorityTaskWoken);
+  if (xHigherPriorityTaskWoken) portYIELD_FROM_ISR();
+}
+
+volatile int64_t lastButtonAIsrUs = 0;
+volatile int64_t lastButtonBIsrUs = 0;
+
+// Registered via gpio_isr_handler_add() instead of Arduino's attachInterrupt()
+// -- gpio_isr_t takes a `void *arg`, unused here since each button has its
+// own handler.
+void IRAM_ATTR buttonA_isr(void *arg) {
+  int64_t now = esp_timer_get_time();
+  if (now - lastButtonAIsrUs < (int64_t)BUTTON_DEBOUNCE_US) return; // contact-bounce/double-tap guard
+  lastButtonAIsrUs = now;
+  uint8_t id = 0;
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xQueueSendFromISR(buttonEventQueue, &id, &xHigherPriorityTaskWoken);
+  if (xHigherPriorityTaskWoken) portYIELD_FROM_ISR();
+}
+
+void IRAM_ATTR buttonB_isr(void *arg) {
+  int64_t now = esp_timer_get_time();
+  if (now - lastButtonBIsrUs < (int64_t)BUTTON_DEBOUNCE_US) return;
+  lastButtonBIsrUs = now;
+  uint8_t id = 1;
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xQueueSendFromISR(buttonEventQueue, &id, &xHigherPriorityTaskWoken);
+  if (xHigherPriorityTaskWoken) portYIELD_FROM_ISR();
+}
+
+// Non-blocking reader for the "emg,fsr\n" lines the Uno sends every ~10ms.
 void pollUnoLink() {
   static char lineBuf[32];
   static uint8_t lineLen = 0;
@@ -104,8 +287,7 @@ void pollUnoLink() {
     }
   }
 
-  // No valid line in 500ms = treat the link as down (Uno unplugged/reset);
-  // values stay at their last-known reading rather than resetting to 0.
+  // No valid line in 500ms = link down (Uno unplugged/reset); keep last-known values.
   bool unoLinkOk = (millis() - lastUnoRxMs) < 500;
   if (unoLinkOk != unoLinkWasOk) {
     unoLinkWasOk = unoLinkOk;
@@ -153,200 +335,6 @@ void mpuReadAccelMs2(float &ax, float &ay, float &az) {
   az = (rawZ / 4096.0f) * g_to_ms2;
 }
 
-// ----------------------------------------------------
-// ข้อมูลสำหรับล็อกอิน CoEIoT (WPA2-Personal)
-// ----------------------------------------------------
-const char* ssid     = "Nig";
-const char* password = "chicken123123";
-
-// IP คอมพิวเตอร์ของคุณ (ดูจากคำสั่ง hostname -I บนคอม)
-const char* serverUrl = "http://172.20.10.3:5173/api/telemetry";
-
-// ----------------------------------------------------
-// Sensor objects (see docs/sensor_usage.md for the 6-sensor fusion design)
-// ----------------------------------------------------
-MAX30105          max30102;
-Adafruit_MLX90614 mlx;
-
-// Persistent HTTP client + TCP connection, reused across every telemetry POST
-// instead of reconnecting from scratch each cycle -- a fresh TCP handshake was
-// taking 80-110ms out of every 100ms send interval, starving the 100Hz sensor
-// sampling loop (MAX30102 beat detection needs continuous sampling to see the
-// pulse waveform; the MPU velocity integration's dt also got skewed by the stall).
-WiFiClient httpClient;
-HTTPClient http;
-
-bool statusMpu = false;
-bool statusMax = false;
-bool statusMlx = false;
-
-// ----------------------------------------------------
-// Timing: sample sensors fast (for waveform fidelity / integration accuracy),
-// but only POST to the web API at a lower rate to cut WiFi/HTTP overhead.
-// ----------------------------------------------------
-const unsigned long SAMPLE_INTERVAL_MS = 10;  // 100 Hz local sensor sampling
-// 4 Hz network send (was 10 Hz/100ms) -- http.POST() blocks the loop for tens
-// of ms per call, which was starving the 100Hz sampling MAX30102's beat
-// detection needs to see the pulse waveform; sending less often gives it more
-// uninterrupted room between blocking calls.
-const unsigned long SEND_INTERVAL_MS   = 250;
-const int EMG_BATCH_CAPACITY = (SEND_INTERVAL_MS / SAMPLE_INTERVAL_MS) + 2; // small margin for jitter
-int emgBatch[EMG_BATCH_CAPACITY];
-int emgBatchCount = 0;
-int fsrLatest = 0;
-unsigned long lastSampleMs = 0;
-unsigned long lastSendMs = 0;
-
-const unsigned long LCD_UPDATE_INTERVAL_MS = 200; // 5 Hz -- plenty for a human-readable display
-unsigned long lastLcdMs = 0;
-
-// MLX90614 changes slowly, so it doesn't need fast-sample-rate polling, but it
-// must NOT be gated on the network-send block below (which only runs while
-// WiFi is connected) -- otherwise skinTemp/deltaTemp simply never update (stay
-// at their 0.0f default) whenever WiFi is down/not yet connected.
-const unsigned long MLX_READ_INTERVAL_MS = 250;
-unsigned long lastMlxReadMs = 0;
-
-// All sensor values are logged together in one line at this rate, instead of
-// each sensor printing its own debug line on its own schedule -- keeps the
-// serial monitor readable without needing to print at the 100Hz sample rate.
-const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000; // 1 Hz
-unsigned long lastDebugPrintMs = 0;
-
-// MLX90614 skin temp, kept global (not scoped to the network-send block) so
-// the debug print above can show the last known reading too.
-float skinTemp = 0.0f, deltaTemp = 0.0f;
-
-// MPU-6050: pitch/roll + concentric velocity via leaky-integrated vertical
-// acceleration, updated every fast sample for accurate dt. This is a simplified
-// VBT estimate (no zero-velocity-update / Kalman filter), good enough for
-// relative rep-to-rep comparison, not lab-grade accuracy.
-const float GRAVITY_MSS = 9.80665f;
-const float VELOCITY_DECAY = 0.98f; // bleeds off drift each sample
-float velocity = 0.0f, mpuPitch = 0.0f, mpuRoll = 0.0f;
-float mpuAx = 0.0f, mpuAy = 0.0f, mpuAz = 0.0f;
-unsigned long lastMpuMicros = 0;
-
-// MAX30102: beat detection -> BPM (same approach as 05_max30102_test.cpp)
-const byte RATE_SIZE = 4;
-byte bpmRates[RATE_SIZE];
-byte bpmRateSpot = 0;
-long lastBeat = 0;
-int beatAvg = 0;
-const long FINGER_PRESENT_IR_THRESHOLD = 50000;
-
-// MAX30102: rough SpO2 estimate from a rolling Red/IR AC-DC ratio window.
-// Approximate empirical calibration (SpO2 ~= 110 - 25*R); not clinically accurate.
-const int SPO2_WINDOW_SAMPLES = 200; // ~2s at the 100Hz fast-sample rate
-int spo2SampleCount = 0;
-long irMin = 0, irMax = 0, redMin = 0, redMax = 0;
-float spo2Estimate = 98.0f;
-
-// MLX90614: report temperature delta vs. the skin temp measured at boot
-float skinTempBaseline = 0.0f;
-
-// FSR: grip stability (%) from the range of readings over a short rolling window
-const int FSR_WINDOW_SAMPLES = 20;
-int fsrHistory[FSR_WINDOW_SAMPLES];
-int fsrHistoryIdx = 0;
-bool fsrHistoryFull = false;
-
-void connectWiFi() {
-  Serial.println("\n[WiFi] Setting up connection for CoEIoT...");
-
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  Serial.print("[WiFi] Connecting to CoEIoT");
-  int retry = 0;
-  while (WiFi.status() != WL_CONNECTED && retry < 40) {
-    delay(500);
-    Serial.print(".");
-    retry++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WiFi] ✅ Connected to CoEIoT successfully!");
-    Serial.print("[WiFi] ESP32 IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\n[WiFi] ❌ Failed to connect to CoEIoT. Please verify credentials.");
-  }
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(100); // let UART settle before any output, otherwise the first line(s) get garbled
-
-  pinMode(BUTTON_A_PIN, INPUT_PULLUP);
-  pinMode(BUTTON_B_PIN, INPUT_PULLUP);
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
-
-  Serial2.begin(UNO_LINK_BAUD, SERIAL_8N1, UNO_LINK_RX_PIN, UNO_LINK_TX_PIN);
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Wire.setClock(100000); // conservative bus speed for breadboard/long-wire I2C
-
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Booting...");
-
-  // A device can ACK a bare address (Wire.beginTransmission/endTransmission) but still
-  // fail a real register read on first attempt right after power-up; retry a few times
-  // with a short settle delay before giving up.
-  for (int attempt = 0; attempt < 5 && !statusMpu; attempt++) {
-    if (attempt > 0) delay(100);
-    statusMpu = mpuBegin();
-  }
-  if (statusMpu) {
-    Serial.println("[I2C] MPU-6050/6500  (0x68) -> OK");
-  } else {
-    Serial.println("[I2C] MPU-6050/6500  (0x68) -> FAILED (velocity/pitch/roll will read 0)");
-  }
-  lastMpuMicros = micros();
-
-  for (int attempt = 0; attempt < 5 && !statusMax; attempt++) {
-    if (attempt > 0) delay(100);
-    statusMax = max30102.begin(Wire, I2C_SPEED_FAST);
-  }
-  if (statusMax) {
-    max30102.setup();
-    max30102.setPulseAmplitudeRed(0x0A);
-    max30102.setPulseAmplitudeGreen(0);
-    Serial.println("[I2C] MAX30102  (0x57) -> OK");
-  } else {
-    Serial.println("[I2C] MAX30102  (0x57) -> FAILED (hr/spo2 will read 0)");
-  }
-
-  // max30102.begin() calls Wire.setClock(I2C_SPEED_FAST) internally, silently
-  // undoing the conservative 100kHz speed set above -- put it back before the
-  // rest of the bus (MLX90614, LCD, MPU reads in the main loop) uses it, or
-  // the faster clock causes intermittent timeouts on breadboard/long wiring.
-  Wire.setClock(100000);
-
-  for (int attempt = 0; attempt < 5 && !statusMlx; attempt++) {
-    if (attempt > 0) delay(100);
-    statusMlx = mlx.begin(0x5A, &Wire);
-  }
-  if (statusMlx) {
-    float baseline = mlx.readObjectTempC();
-    if (!isnan(baseline)) skinTempBaseline = baseline;
-    Serial.println("[I2C] MLX90614  (0x5A) -> OK");
-  } else {
-    Serial.println("[I2C] MLX90614  (0x5A) -> FAILED (skinTemp/deltaTemp will read 0)");
-  }
-
-  for (int i = 0; i < FSR_WINDOW_SAMPLES; i++) fsrHistory[i] = 0;
-
-  connectWiFi();
-
-  http.begin(httpClient, serverUrl);
-  http.addHeader("Content-Type", "application/json");
-  http.setReuse(true); // keep the TCP connection open between POSTs
-}
-
 void updateFsrStability(int fsrVal) {
   fsrHistory[fsrHistoryIdx] = fsrVal;
   fsrHistoryIdx = (fsrHistoryIdx + 1) % FSR_WINDOW_SAMPLES;
@@ -367,64 +355,6 @@ float computeFsrStability() {
   float range = hi - lo;
   float stability = 100.0f - (range / 200.0f) * 100.0f;
   return constrain(stability, 0.0f, 100.0f);
-}
-
-// Beeps in a non-blocking on/off pattern while a set is active AND the grip is
-// either weak (FSR below the low-force threshold, with hysteresis to prevent
-// chatter right at the threshold) or unsteady (stability below
-// FSR_STABILITY_ALERT_THRESHOLD) -- gating on setActive keeps it quiet at
-// rest (idle hands read near-zero force, which isn't a "weak grip" event).
-// Either condition must hold continuously for BUZZER_ALERT_DELAY_MS before it
-// actually sounds, so a brief blip doesn't trigger it.
-void updateBuzzer(unsigned long now) {
-  static bool lowForce = false;
-  if (lowForce) {
-    if (fsrLatest > FSR_LOW_FORCE_THRESHOLD + FSR_LOW_FORCE_HYSTERESIS) lowForce = false;
-  } else {
-    if (fsrLatest < FSR_LOW_FORCE_THRESHOLD) lowForce = true;
-  }
-
-  bool unsteady = computeFsrStability() < FSR_STABILITY_ALERT_THRESHOLD;
-  bool conditionMet = setActive && (lowForce || unsteady);
-
-  if (!conditionMet) {
-    fsrAlertConditionSinceMs = 0;
-  } else if (fsrAlertConditionSinceMs == 0) {
-    fsrAlertConditionSinceMs = now;
-  }
-
-  bool shouldAlert = conditionMet && fsrAlertConditionSinceMs != 0 && (now - fsrAlertConditionSinceMs) >= BUZZER_ALERT_DELAY_MS;
-  if (!shouldAlert) {
-    if (buzzerOn) {
-      buzzerOn = false;
-      digitalWrite(BUZZER_PIN, LOW);
-    }
-    return;
-  }
-
-  if (now - buzzerLastToggleMs >= BUZZER_BEEP_INTERVAL_MS) {
-    buzzerLastToggleMs = now;
-    buzzerOn = !buzzerOn;
-    digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
-  }
-}
-
-// Detects a HIGH->LOW (pressed) transition, ignoring further edges for
-// BUTTON_DEBOUNCE_MS to filter contact bounce. Sets `eventFlag` true on a
-// clean press; the caller latches it until the next network send. Also
-// returns true for just this one tick, so callers needing a one-shot
-// (e.g. the local LCD set timer) don't have to wait for/interfere with
-// that network-send latch.
-bool pollButtonEdge(int pin, bool &lastLevel, unsigned long &lastEdgeMs, bool &eventFlag, unsigned long now) {
-  bool level = (digitalRead(pin) == LOW);
-  bool justPressed = false;
-  if (level && !lastLevel && (now - lastEdgeMs) >= BUTTON_DEBOUNCE_MS) {
-    eventFlag = true;
-    justPressed = true;
-    lastEdgeMs = now;
-  }
-  lastLevel = level;
-  return justPressed;
 }
 
 void updateSpo2Window(long irValue, long redValue) {
@@ -451,13 +381,45 @@ void updateSpo2Window(long irValue, long redValue) {
   }
 }
 
-// Line 1: current set number + status, driven by button A (start/stop) and
-// button B (reset) -- STOP before any set has ever started (setCount == 0),
-// RUNNING while active, RESTING between sets otherwise. Line 2: a matching
-// live-counting timer (RUN / READY / REST). Neither value is sent to the web
-// app, which tracks its own rep count (camera-driven) and set state
-// independently.
-void updateLcd(unsigned long now) {
+// Beeps on/off while a set is active AND grip is weak or unsteady, once that
+// condition holds for BUZZER_ALERT_DELAY_MS straight. Takes its inputs as
+// parameters (read from `shared` by ControlTask) instead of touching globals.
+void updateBuzzer(unsigned long now, int fsrLatest, float fsrStability, bool setActive) {
+  static bool lowForce = false;
+  if (lowForce) {
+    if (fsrLatest > FSR_LOW_FORCE_THRESHOLD + FSR_LOW_FORCE_HYSTERESIS) lowForce = false;
+  } else {
+    if (fsrLatest < FSR_LOW_FORCE_THRESHOLD) lowForce = true;
+  }
+
+  bool unsteady = fsrStability < FSR_STABILITY_ALERT_THRESHOLD;
+  bool conditionMet = setActive && (lowForce || unsteady);
+
+  if (!conditionMet) {
+    fsrAlertConditionSinceMs = 0;
+  } else if (fsrAlertConditionSinceMs == 0) {
+    fsrAlertConditionSinceMs = now;
+  }
+
+  bool shouldAlert = conditionMet && fsrAlertConditionSinceMs != 0 && (now - fsrAlertConditionSinceMs) >= BUZZER_ALERT_DELAY_MS;
+  if (!shouldAlert) {
+    if (buzzerOn) {
+      buzzerOn = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+    return;
+  }
+
+  if (now - buzzerLastToggleMs >= BUZZER_BEEP_INTERVAL_MS) {
+    buzzerLastToggleMs = now;
+    buzzerOn = !buzzerOn;
+    digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
+  }
+}
+
+// Set number/status + a live timer, driven by the button state in `shared`
+// (not the web app's own rep count/state, which it tracks independently).
+void updateLcd(unsigned long now, bool setActive, unsigned long setStartMs, unsigned long restStartMs, int setCount) {
   unsigned long elapsedMs = setActive ? (now - setStartMs) : (now - restStartMs);
   unsigned long totalSec = elapsedMs / 1000;
   int mm = (int)((totalSec / 60) % 100); // clamp so it always fits mm:ss
@@ -473,199 +435,240 @@ void updateLcd(unsigned long now) {
     snprintf(line2, sizeof(line2), "%s:%02d:%02d", "TIME", mm, ss);
   }
 
-  lcd.setCursor(0, 0);
-  lcd.print(line1);
-  for (int i = strlen(line1); i < LCD_COLS; i++) lcd.print(' ');
+  // I2C bus is shared with SensorTask's sensor reads -- serialize.
+  if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    for (int i = strlen(line1); i < LCD_COLS; i++) lcd.print(' ');
 
-  lcd.setCursor(0, 1);
-  lcd.print(line2);
-  for (int i = strlen(line2); i < LCD_COLS; i++) lcd.print(' ');
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
+    for (int i = strlen(line2); i < LCD_COLS; i++) lcd.print(' ');
+    xSemaphoreGive(i2cMutex);
+  }
 }
 
-void loop() {
-  unsigned long now = millis();
+// Watchdog initialization helper supporting both ESP32 Arduino Core 2.x and 3.x (ESP-IDF v5)
+void initWatchdog() {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = (uint32_t)(WATCHDOG_TIMEOUT_S * 1000),
+    .idle_core_mask = 0,
+    .trigger_panic = true,
+  };
+  if (esp_task_wdt_init(&twdt_config) != ESP_OK) {
+    esp_task_wdt_reconfigure(&twdt_config);
+  }
+#else
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true);
+#endif
+}
 
-  pollUnoLink(); // drain the UART buffer every iteration, not just every 10ms tick
+// Reached from ControlTask's long-idle check. Tears down WiFi + the task
+// watchdog first (its hardware timer keeps counting through the sleep, so
+// leaving tasks subscribed would false-panic on wake), arms wake sources,
+// then blocks until one fires.
+void enterLightSleepUntilWake() {
+  Serial.println("[POWER] Long idle detected -- entering light sleep.");
 
-  // ---- Fast local sampling (100 Hz): EMG waveform fidelity, accurate MPU dt
-  // integration, FSR stability window, and MAX30102 beat detection all need
-  // frequent polling even though we only POST to the API at a lower rate. ----
-  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
-    lastSampleMs = now;
+  if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    lcd.setCursor(0, 0); lcd.print("SLEEPING...     ");
+    lcd.setCursor(0, 1); lcd.print("PRESS ANY BUTTON");
+    xSemaphoreGive(i2cMutex);
+  }
 
-    // Counts how many times this "100Hz" block actually runs per second, to
-    // see whether something (I2C, HTTP) is silently slowing it down well
-    // below the coded 10ms/100Hz target. Reported in the consolidated
-    // [SENSORS] print below.
-    static int sampleRateCounter = 0;
-    sampleRateCounter++;
+  WiFi.disconnect(true);
 
-    // Buttons: debounced press-edge detection; events latch until the next send.
-    bool buttonAJustPressed = pollButtonEdge(BUTTON_A_PIN, buttonALastLevel, buttonALastEdgeMs, buttonAEvent, now);
-    bool buttonBJustPressed = pollButtonEdge(BUTTON_B_PIN, buttonBLastLevel, buttonBLastEdgeMs, buttonBEvent, now);
-    buttonAPressed = buttonALastLevel;
-    buttonBPressed = buttonBLastLevel;
+  esp_task_wdt_delete(sensorTaskHandle);
+  esp_task_wdt_delete(networkTaskHandle);
+  esp_task_wdt_delete(lcdTaskHandle);
+  esp_task_wdt_delete(controlTaskHandle); // deletes self last
+  esp_task_wdt_deinit();
 
-    // Local LCD set timer, independent of the web app's own start/stop/save
-    // logic: A starts a fresh timer on the first press of a set and freezes
-    // it on the next (stop); B (stop + save session) resets everything so
-    // the LCD is ready for a brand-new session.
-    if (buttonAJustPressed) {
-      setActive = !setActive;
-      if (setActive) {
-        setStartMs = now;
-        setCount++;
-      } else {
-        restStartMs = now; // rest timer starts counting up from here
-      }
-    }
-    if (buttonBJustPressed) {
-      setActive = false;
-      restStartMs = now;
-      repCount = 0;
-      setCount = 0;
-    }
+  // Classic ESP32's ext1 multi-GPIO wake only supports "all pins low" or "any
+  // pin high" -- neither fits two independent active-low buttons. So only
+  // Button A (a valid RTC GPIO) wakes via ext0; Button B still works while
+  // awake but can't wake the chip. Which sources actually arm is picked by
+  // SLEEP_WAKE_SOURCE_MASK.
+  if (SLEEP_WAKE_SOURCE_MASK & WAKE_SRC_EXT0) {
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON_A_PIN, 0 /* wake on LOW = pressed */);
+  }
+  if (SLEEP_WAKE_SOURCE_MASK & WAKE_SRC_TIMER) {
+    esp_sleep_enable_timer_wakeup(IDLE_WAKE_KEEPALIVE_US);
+  }
 
-    // sEMG + FSR (raw ADC counts; server converts to µV / N, see telemetryStore.ts).
-    // Read from the Uno link, not this board's own analogRead() -- see
-    // pollUnoLink() above and uno_emg_fsr_link.cpp for where these come from.
+  esp_light_sleep_start(); // <-- blocks here until a button press or the keepalive timer fires
+
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  Serial.printf("[POWER] Woke from light sleep (cause=%d), resubscribing watchdog + reconnecting WiFi...\n", (int)cause);
+
+  initWatchdog();
+  esp_task_wdt_add(sensorTaskHandle);
+  esp_task_wdt_add(networkTaskHandle);
+  esp_task_wdt_add(lcdTaskHandle);
+  esp_task_wdt_add(controlTaskHandle);
+
+  connectWiFi();
+}
+
+// Core 1, prio 3 (highest): the 100Hz sampling loop, paced by the hardware
+// timer's semaphore. Publishes a `shared` snapshot + an EMG sample each tick.
+void sensorTask(void *pvParameters) {
+  lastMpuMicros = micros();
+
+  for (;;) {
+    xSemaphoreTake(sampleTickSemaphore, portMAX_DELAY); // paced by onSampleTimer()'s hw timer ISR
+    esp_task_wdt_reset();
+
+    unsigned long now = millis();
+
+    pollUnoLink(); // drains the UART buffer every tick so it never backs up
+
     int emgVal = unoEmgVal;
-    fsrLatest = unoFsrForce;
-    updateFsrStability(fsrLatest);
-    updateBuzzer(now);
-    if (emgBatchCount < EMG_BATCH_CAPACITY) emgBatch[emgBatchCount++] = emgVal;
+    int fsrVal = unoFsrForce;
+    updateFsrStability(fsrVal);
+    float stability = computeFsrStability();
 
-    // MPU-6050/6500: pitch/roll + leaky-integrated concentric velocity
-    if (statusMpu) {
-      mpuReadAccelMs2(mpuAx, mpuAy, mpuAz);
-      mpuPitch = atan2(mpuAy, sqrt(mpuAx * mpuAx + mpuAz * mpuAz)) * 180.0 / PI;
-      mpuRoll = atan2(-mpuAx, mpuAz) * 180.0 / PI;
-
-      unsigned long nowMicros = micros();
-      float dt = (nowMicros - lastMpuMicros) / 1000000.0f;
-      lastMpuMicros = nowMicros;
-
-      float netAccel = mpuAz - GRAVITY_MSS;
-      velocity = (velocity + netAccel * dt) * VELOCITY_DECAY;
+    // Non-blocking push -- if the queue is momentarily full, drop the oldest
+    // sample rather than ever blocking this 100Hz task.
+    if (xQueueSend(emgQueue, &emgVal, 0) != pdTRUE) {
+      int discarded;
+      xQueueReceive(emgQueue, &discarded, 0);
+      xQueueSend(emgQueue, &emgVal, 0);
     }
 
-    // MAX30102: heart rate (BPM) + rough SpO2 estimate.
-    //
-    // check() is a cheap, non-blocking poll of the sensor's FIFO (just reads
-    // two pointer registers if nothing new is ready). The old code called the
-    // library's getIR()/getRed() convenience wrappers instead, which each
-    // call safeCheck() internally -- a busy-wait loop that blocks for up to
-    // 250ms until a *new* sample lands in the FIFO. Calling both back-to-back
-    // meant waiting for two separate sensor sample cycles per loop iteration,
-    // which was stalling the whole 100Hz fast-sample loop down to ~15Hz and
-    // starving the beat-detection algorithm of the continuous sampling it
-    // needs to see the pulse waveform. Reading straight from the local FIFO
-    // buffer (getFIFOIR/getFIFORed + nextSample) is O(1) with no I2C wait.
     long lastIrValue = 0, lastRedValue = 0;
-    if (statusMax) {
-      max30102.check();
+    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      // MPU-6050/6500: pitch/roll + leaky-integrated concentric velocity
+      if (statusMpu) {
+        mpuReadAccelMs2(mpuAx, mpuAy, mpuAz);
+        mpuPitch = atan2(mpuAy, sqrt(mpuAx * mpuAx + mpuAz * mpuAz)) * 180.0 / PI;
+        mpuRoll = atan2(-mpuAx, mpuAz) * 180.0 / PI;
 
-      while (max30102.available()) {
-        long irValue = max30102.getFIFOIR();
-        long redValue = max30102.getFIFORed();
-        lastIrValue = irValue;
-        lastRedValue = redValue;
+        unsigned long nowMicros = micros();
+        float dt = (nowMicros - lastMpuMicros) / 1000000.0f;
+        lastMpuMicros = nowMicros;
 
-        if (irValue > FINGER_PRESENT_IR_THRESHOLD) {
-          if (checkForBeat(irValue)) {
-            long delta = millis() - lastBeat;
-            lastBeat = millis();
-            float bpm = 60.0f / (delta / 1000.0f);
-            // Physiologically plausible resting/exercising HR range -- 20-255 let
-            // obvious noise (e.g. a motion-artifact "beat" every 2s = 27 BPM)
-            // through and pollute the rolling average.
-            Serial.printf("[MAX30102] beat detected! delta=%ldms bpm=%.1f %s\n",
-              delta, bpm, (bpm > 40 && bpm < 220) ? "(accepted)" : "(rejected, out of 40-220 range)");
-            if (bpm > 40 && bpm < 220) {
-              bpmRates[bpmRateSpot++] = (byte)bpm;
-              bpmRateSpot %= RATE_SIZE;
-              long sum = 0;
-              for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
-              beatAvg = sum / RATE_SIZE;
-            }
-          }
-          updateSpo2Window(irValue, redValue);
-        } else {
-          beatAvg = 0; // no finger on sensor
-        }
-
-        max30102.nextSample();
+        float netAccel = mpuAz - GRAVITY_MSS;
+        velocity = (velocity + netAccel * dt) * VELOCITY_DECAY;
       }
+
+      // MAX30102: HR (BPM) + SpO2. Reading straight from the FIFO
+      // (getFIFOIR/getFIFORed + nextSample) is O(1), unlike the library's
+      // blocking getIR()/getRed() wrappers.
+      if (statusMax) {
+        max30102.check();
+
+        while (max30102.available()) {
+          long irValue = max30102.getFIFOIR();
+          long redValue = max30102.getFIFORed();
+          lastIrValue = irValue;
+          lastRedValue = redValue;
+
+          if (irValue > FINGER_PRESENT_IR_THRESHOLD) {
+            if (checkForBeat(irValue)) {
+              long delta = millis() - lastBeat;
+              lastBeat = millis();
+              float bpm = 60.0f / (delta / 1000.0f);
+              // 40-220 BPM keeps obvious noise (e.g. a motion-artifact "beat"
+              // every 2s = 27 BPM) out of the rolling average.
+              if (bpm > 40 && bpm < 220) {
+                bpmRates[bpmRateSpot++] = (byte)bpm;
+                bpmRateSpot %= RATE_SIZE;
+                long sum = 0;
+                for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
+                beatAvg = sum / RATE_SIZE;
+              }
+            }
+            updateSpo2Window(irValue, redValue);
+          } else {
+            beatAvg = 0; // no finger on sensor
+          }
+
+          max30102.nextSample();
+        }
+      }
+
+      // MLX90614 changes slowly -- read independently of WiFi state so
+      // skinTemp/deltaTemp keep updating while WiFi is down.
+      if (statusMlx && now - lastMlxReadMs >= MLX_READ_INTERVAL_MS) {
+        lastMlxReadMs = now;
+        float t = mlx.readObjectTempC();
+        if (!isnan(t)) {
+          skinTemp = t;
+          deltaTemp = skinTemp - skinTempBaseline;
+        }
+      }
+
+      xSemaphoreGive(i2cMutex);
     }
 
-    // ---- Consolidated sensor debug print (1 Hz): all sensor values on one
-    // line instead of each sensor printing on its own schedule. ----
+    // Publish this tick's readings for NetworkTask/ControlTask/LcdTask.
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      shared.fsrLatest = fsrVal;
+      shared.fsrStability = stability;
+      shared.mpuPitch = mpuPitch;
+      shared.mpuRoll = mpuRoll;
+      shared.velocity = velocity;
+      shared.mpuAx = mpuAx;
+      shared.mpuAy = mpuAy;
+      shared.mpuAz = mpuAz;
+      shared.beatAvg = beatAvg;
+      shared.spo2Estimate = spo2Estimate;
+      shared.skinTemp = skinTemp;
+      shared.deltaTemp = deltaTemp;
+      xSemaphoreGive(stateMutex);
+    }
+
     if (now - lastDebugPrintMs >= DEBUG_PRINT_INTERVAL_MS) {
       lastDebugPrintMs = now;
       Serial.printf(
-        "[SENSORS] loop=%dHz | EMG=%d | FSR=%d stability=%.1f%% | "
+        "[SENSORS] core=%d | EMG=%d | FSR=%d stability=%.1f%% | "
         "MPU pitch=%.1f roll=%.1f vel=%.2f | HR=%d SpO2=%.1f%% | "
         "skinTemp=%.1fC dTemp=%.1fC | IR=%ld RED=%ld finger=%s\n",
-        sampleRateCounter, emgVal, fsrLatest, computeFsrStability(),
+        xPortGetCoreID(), emgVal, fsrVal, stability,
         mpuPitch, mpuRoll, velocity, beatAvg, spo2Estimate,
         skinTemp, deltaTemp, lastIrValue, lastRedValue,
         lastIrValue > FINGER_PRESENT_IR_THRESHOLD ? "yes" : "no");
-      sampleRateCounter = 0;
     }
   }
+}
 
-  // ---- LCD refresh (5 Hz): independent of the network send rate so the
-  // display keeps updating even if WiFi/the API is down. ----
-  if (now - lastLcdMs >= LCD_UPDATE_INTERVAL_MS) {
-    lastLcdMs = now;
-    updateLcd(now);
-  }
+// Core 0, prio 2: every 250ms, drains emgQueue into a batch, snapshots
+// `shared`, POSTs the payload. On its own core so a slow POST never stalls
+// SensorTask's 100Hz cadence.
+void networkTask(void *pvParameters) {
+  TickType_t lastWake = xTaskGetTickCount();
 
-  // ---- MLX90614 read (4 Hz): independent of WiFi/network-send state -- see
-  // MLX_READ_INTERVAL_MS comment above. skinTemp/deltaTemp are globals so a
-  // failed/NaN read (e.g. I2C hiccup) keeps the last good value instead of
-  // resetting to 0/NaN; the [SENSORS] debug print and telemetry payload below
-  // both just read whatever this last stored.
-  if (statusMlx && now - lastMlxReadMs >= MLX_READ_INTERVAL_MS) {
-    lastMlxReadMs = now;
-    float t = mlx.readObjectTempC();
-    if (!isnan(t)) {
-      skinTemp = t;
-      deltaTemp = skinTemp - skinTempBaseline;
-    } else {
-      static unsigned long lastMlxFailPrintMs = 0;
-      if (now - lastMlxFailPrintMs >= 1000) {
-        lastMlxFailPrintMs = now;
-        Serial.println("[MLX90614] read failed (NaN) -- check wiring/pull-ups, not I2C clock (already 100kHz)");
-      }
-    }
-  }
+  for (;;) {
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SEND_INTERVAL_MS));
+    esp_task_wdt_reset();
 
-  // ---- Slow network send (10 Hz): batch every EMG sample collected since the
-  // last send so no signal is lost even though we POST less often. ----
-  if (WiFi.status() == WL_CONNECTED && now - lastSendMs >= SEND_INTERVAL_MS) {
-    lastSendMs = now;
+    if (WiFi.status() != WL_CONNECTED) continue;
 
-    float fsrStability = computeFsrStability();
-
-    char emgArray[192]; // fits EMG_BATCH_CAPACITY (~27 at 250ms/10ms) worst-case 4-digit values
+    char emgArray[400]; // generous margin over EMG_QUEUE_LEN worst-case 4-digit values
     int pos = snprintf(emgArray, sizeof(emgArray), "[");
-    for (int i = 0; i < emgBatchCount; i++) {
-      pos += snprintf(emgArray + pos, sizeof(emgArray) - pos, "%s%d", i == 0 ? "" : ",", emgBatch[i]);
+    int sentBatchSize = 0;
+    int sample;
+    while (xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
+      pos += snprintf(emgArray + pos, sizeof(emgArray) - pos, "%s%d", sentBatchSize == 0 ? "" : ",", sample);
+      sentBatchSize++;
+      if (pos >= (int)sizeof(emgArray) - 8) break; // guard against overflow if the queue was way behind
     }
     snprintf(emgArray + pos, sizeof(emgArray) - pos, "]");
-    int sentBatchSize = emgBatchCount;
-    emgBatchCount = 0;
 
-    // Sent only for the one cycle right after a press, then cleared -- the
-    // server treats a `true` here as a discrete "button was pressed" event,
-    // not a held-down level.
-    bool sentButtonA = buttonAEvent;
-    bool sentButtonB = buttonBEvent;
-    buttonAEvent = false;
-    buttonBEvent = false;
+    SharedState snap;
+    bool sentButtonA = false, sentButtonB = false;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      snap = shared;
+      sentButtonA = shared.buttonAEventPending;
+      sentButtonB = shared.buttonBEventPending;
+      shared.buttonAEventPending = false; // one-shot event, cleared after being sent
+      shared.buttonBEventPending = false;
+      xSemaphoreGive(stateMutex);
+    }
 
-    char payload[640];
+    char payload[768];
     snprintf(payload, sizeof(payload),
       "{\"board\":\"esp32\","
       "\"emg\":{\"raw\":%s},"
@@ -673,9 +676,9 @@ void loop() {
       "\"mpu\":{\"pitch\":%.2f,\"roll\":%.2f,\"velocity\":%.3f,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f},"
       "\"vitals\":{\"hr\":%d,\"spo2\":%.1f,\"skinTemp\":%.2f,\"deltaTemp\":%.2f},"
       "\"buttons\":{\"a\":%s,\"b\":%s}}",
-      emgArray, fsrLatest, fsrStability,
-      mpuPitch, mpuRoll, velocity, mpuAx, mpuAy, mpuAz,
-      beatAvg, spo2Estimate, skinTemp, deltaTemp,
+      emgArray, snap.fsrLatest, snap.fsrStability,
+      snap.mpuPitch, snap.mpuRoll, snap.velocity, snap.mpuAx, snap.mpuAy, snap.mpuAz,
+      snap.beatAvg, snap.spo2Estimate, snap.skinTemp, snap.deltaTemp,
       sentButtonA ? "true" : "false", sentButtonB ? "true" : "false");
 
     unsigned long postStartMs = millis();
@@ -688,6 +691,220 @@ void loop() {
       Serial.printf("HTTP Error: %s [POST took %lums]\n", http.errorToString(code).c_str(), postDurationMs);
     }
   }
+}
 
-  delay(1); // yield to WiFi/background tasks
+// Core 1, prio 1 (lowest): every 200ms, renders the set/rest timer snapshot.
+// A missed frame here is harmless, unlike a missed sample or network send.
+void lcdTask(void *pvParameters) {
+  TickType_t lastWake = xTaskGetTickCount();
+
+  for (;;) {
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(LCD_UPDATE_INTERVAL_MS));
+    esp_task_wdt_reset();
+
+    bool setActive;
+    unsigned long setStartMs, restStartMs;
+    int setCount;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) != pdTRUE) continue; // skip this frame rather than render a stale/torn read
+    setActive = shared.setActive;
+    setStartMs = shared.setStartMs;
+    restStartMs = shared.restStartMs;
+    setCount = shared.setCount;
+    xSemaphoreGive(stateMutex);
+
+    updateLcd(millis(), setActive, setStartMs, restStartMs, setCount);
+  }
+}
+
+// Core 1, prio 2: consumes button events from the ISRs, owns the
+// set/rest/button-latch state, re-evaluates the buzzer every wake, and
+// triggers light sleep after a long enough genuine idle period.
+void controlTask(void *pvParameters) {
+  for (;;) {
+    esp_task_wdt_reset();
+
+    uint8_t buttonId;
+    // Block up to 100ms for a button event; either way fall through below to
+    // re-check the buzzer/idle conditions on a steady cadence.
+    if (xQueueReceive(buttonEventQueue, &buttonId, pdMS_TO_TICKS(100)) == pdTRUE) {
+      unsigned long pressNow = millis();
+      if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (buttonId == 0) {
+          // Button A: start/stop toggle
+          shared.setActive = !shared.setActive;
+          if (shared.setActive) {
+            shared.setStartMs = pressNow;
+            shared.setCount++;
+          } else {
+            shared.restStartMs = pressNow; // rest timer starts counting up from here
+          }
+          shared.buttonAEventPending = true;
+        } else {
+          // Button B: stop current set (if running) + reset
+          shared.setActive = false;
+          shared.restStartMs = pressNow;
+          shared.repCount = 0;
+          shared.setCount = 0;
+          shared.buttonBEventPending = true;
+        }
+        shared.lastActivityMs = pressNow;
+        xSemaphoreGive(stateMutex);
+      }
+    }
+
+    unsigned long now = millis();
+    int fsrLatest = 0;
+    float fsrStability = 100.0f;
+    bool setActive = false;
+    bool idleForSleep = false;
+    unsigned long idleForMs = 0;
+
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      fsrLatest = shared.fsrLatest;
+      fsrStability = shared.fsrStability;
+      setActive = shared.setActive;
+      if (!shared.setActive && shared.setCount == 0) {
+        idleForMs = now - shared.lastActivityMs;
+      }
+      xSemaphoreGive(stateMutex);
+    }
+    updateBuzzer(now, fsrLatest, fsrStability, setActive);
+
+#if ENABLE_LIGHT_SLEEP
+    idleForSleep = idleForMs >= IDLE_SLEEP_TIMEOUT_MS;
+    if (idleForSleep) {
+      enterLightSleepUntilWake();
+      if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        // Reset the idle clock so a keepalive-timer wake (not a real button
+        // press) doesn't immediately re-enter sleep in a tight loop.
+        shared.lastActivityMs = millis();
+        xSemaphoreGive(stateMutex);
+      }
+    }
+#endif
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100); // let UART settle before any output
+
+  // Button pin setup happens later via gpio_config()'s bitmask, not
+  // pinMode(), since interrupt type is configured in the same call.
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  Serial2.begin(UNO_LINK_BAUD, SERIAL_8N1, UNO_LINK_RX_PIN, UNO_LINK_TX_PIN);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(100000); // conservative bus speed for breadboard/long-wire I2C
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Booting...");
+
+  // A device can ACK its address but still fail a register read right after
+  // power-up; retry a few times with a short settle delay.
+  for (int attempt = 0; attempt < 5 && !statusMpu; attempt++) {
+    if (attempt > 0) delay(100);
+    statusMpu = mpuBegin();
+  }
+  Serial.println(statusMpu ? "[I2C] MPU-6050/6500  (0x68) -> OK"
+                            : "[I2C] MPU-6050/6500  (0x68) -> FAILED (velocity/pitch/roll will read 0)");
+
+  for (int attempt = 0; attempt < 5 && !statusMax; attempt++) {
+    if (attempt > 0) delay(100);
+    statusMax = max30102.begin(Wire, I2C_SPEED_FAST);
+  }
+  if (statusMax) {
+    max30102.setup();
+    max30102.setPulseAmplitudeRed(0x0A);
+    max30102.setPulseAmplitudeGreen(0);
+    Serial.println("[I2C] MAX30102  (0x57) -> OK");
+  } else {
+    Serial.println("[I2C] MAX30102  (0x57) -> FAILED (hr/spo2 will read 0)");
+  }
+
+  // max30102.begin() silently switches the bus to fast clock -- put it back
+  // to 100kHz before MLX90614/LCD/MPU use it.
+  Wire.setClock(100000);
+
+  for (int attempt = 0; attempt < 5 && !statusMlx; attempt++) {
+    if (attempt > 0) delay(100);
+    statusMlx = mlx.begin(0x5A, &Wire);
+  }
+  if (statusMlx) {
+    float baseline = mlx.readObjectTempC();
+    if (!isnan(baseline)) skinTempBaseline = baseline;
+    Serial.println("[I2C] MLX90614  (0x5A) -> OK");
+  } else {
+    Serial.println("[I2C] MLX90614  (0x5A) -> FAILED (skinTemp/deltaTemp will read 0)");
+  }
+
+  for (int i = 0; i < FSR_WINDOW_SAMPLES; i++) fsrHistory[i] = 0;
+
+  Serial.printf("[BOOT] Free heap before WiFi: %u bytes\n", esp_get_free_heap_size());
+  connectWiFi();
+
+  http.begin(httpClient, serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setReuse(true); // keep the TCP connection open between POSTs
+  Serial.printf("[BOOT] Free heap after WiFi init: %u bytes\n", esp_get_free_heap_size());
+
+  // ---- RTOS primitives ----
+  stateMutex = xSemaphoreCreateMutex();
+  i2cMutex = xSemaphoreCreateMutex();
+  sampleTickSemaphore = xSemaphoreCreateBinary();
+  emgQueue = xQueueCreate(EMG_QUEUE_LEN, sizeof(int));
+  buttonEventQueue = xQueueCreate(8, sizeof(uint8_t));
+
+  shared.lastActivityMs = millis(); // don't start the idle/sleep clock before boot even finishes
+
+  initWatchdog(); // panic+reboot if a subscribed task goes silent
+
+  // Both button pins configured in ONE gpio_config() call via the bitmask
+  // BUTTON_PIN_BIT_MASK, instead of two pinMode()+attachInterrupt() calls.
+  gpio_config_t buttonIoConf = {};
+  buttonIoConf.pin_bit_mask = BUTTON_PIN_BIT_MASK;
+  buttonIoConf.mode = GPIO_MODE_INPUT;
+  buttonIoConf.pull_up_en = GPIO_PULLUP_ENABLE;
+  buttonIoConf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  buttonIoConf.intr_type = GPIO_INTR_NEGEDGE; // FALLING edge = pressed (active-low)
+  gpio_config(&buttonIoConf);
+
+  gpio_install_isr_service(0);
+  gpio_isr_handler_add((gpio_num_t)BUTTON_A_PIN, buttonA_isr, nullptr);
+  gpio_isr_handler_add((gpio_num_t)BUTTON_B_PIN, buttonB_isr, nullptr);
+
+  // Hardware timer driving SensorTask's cadence.
+  // Compatible with ESP32 Arduino Core 2.x and Core 3.x (ESP-IDF v5 timer API).
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  sampleTimer = timerBegin(1000000); // 1MHz tick = 1us resolution
+  timerAttachInterrupt(sampleTimer, &onSampleTimer);
+  timerAlarm(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0, 0);
+  timerStart(sampleTimer);
+#else
+  sampleTimer = timerBegin(0, 80, true);
+  timerAttachInterrupt(sampleTimer, &onSampleTimer, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_EDGE_INTERRUPT) != 0);
+  timerAlarmWrite(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & TIMER_CFG_AUTORELOAD) != 0);
+  timerAlarmEnable(sampleTimer);
+#endif
+
+  xTaskCreatePinnedToCore(sensorTask,  "SensorTask",  4096, nullptr, 3, &sensorTaskHandle,  1);
+  xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, nullptr, 2, &networkTaskHandle, 0);
+  xTaskCreatePinnedToCore(lcdTask,     "LcdTask",     2560, nullptr, 1, &lcdTaskHandle,     1);
+  xTaskCreatePinnedToCore(controlTask, "ControlTask", 2560, nullptr, 2, &controlTaskHandle, 1);
+
+  esp_task_wdt_add(sensorTaskHandle);
+  esp_task_wdt_add(networkTaskHandle);
+  esp_task_wdt_add(lcdTaskHandle);
+  esp_task_wdt_add(controlTaskHandle);
+
+  Serial.printf("[BOOT] Free heap after task creation: %u bytes\n", esp_get_free_heap_size());
+}
+
+void loop() {
+  // setup() already launched all 4 tasks -- delete this Arduino loopTask
+  // outright instead of spinning an empty busy-loop.
+  vTaskDelete(NULL);
 }

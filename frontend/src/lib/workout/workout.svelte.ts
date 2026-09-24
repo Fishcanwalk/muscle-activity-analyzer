@@ -26,6 +26,8 @@ export interface SetSummary {
 	reps: RepRecord[];
 	timestamp: string;
 	sessionId: string | null;
+	/** True once this set has been persisted to the backend via saveSummary(). */
+	saved?: boolean;
 }
 
 export interface SessionSummary {
@@ -217,16 +219,20 @@ class WorkoutManager {
 		this.highTensionTutSeconds = Number((this.highTensionTutSeconds + seconds).toFixed(1));
 	}
 
-	// Shared by the "บันทึกผลเซสชันวันนี้" button (PagePostSet.svelte, with a mock
-	// fallback summary for the demo view) and handleRemoteButton below (real
-	// summary only) so both save identically.
-	async saveSummary(summary: SetSummary): Promise<{ success: boolean }> {
+	// Shared by saveAllPendingSets below (PagePostSet.svelte's "เริ่มเซตถัดไป" /
+	// "จบการออกกำลังกาย" buttons, with a mock fallback summary for the demo view)
+	// and handleRemoteButton below (real summary only) so both save identically.
+	// Idempotent: a set already marked `saved` is skipped instead of re-POSTed, so
+	// calling this again for a set the lifter already moved past is a no-op.
+	async saveSummary(summary: SetSummary, opts: { silent?: boolean } = {}): Promise<{ success: boolean }> {
+		if (summary.saved) return { success: true };
+
 		history.addCompletedSession({
 			session: new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
 			weight: summary.weightKg,
 			cleanReps: summary.cleanReps,
 			purity: summary.formPurityPercent,
-			sEmgRms: 430,
+			sEmgRms: 74,
 			rom: 123,
 			cleanVolume: summary.weightKg * summary.cleanReps
 		});
@@ -253,13 +259,41 @@ class WorkoutManager {
 
 		const { error } = await fastapiClient.POST('/v1/sessions', { body });
 
-		if (error) {
-			toast.error('บันทึกผลเซสชันไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
-		} else {
-			toast.success('บันทึกผลเซสชันสำเร็จ');
+		if (!error) summary.saved = true;
+
+		if (!opts.silent) {
+			if (error) {
+				toast.error('บันทึกผลเซตไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
+			} else {
+				toast.success('บันทึกผลเซตสำเร็จ');
+			}
 		}
 
 		return { success: !error };
+	}
+
+	// Saves every set completed so far this workout that hasn't been persisted yet
+	// (each already saved silently when the lifter moved to the next set -- see
+	// PagePostSet.svelte's handleNextSet -- so normally this only has the most
+	// recent set left to save). Called right before endWorkout() so "จบการออกกำลังกาย"
+	// can never silently discard a set the way it used to.
+	async saveAllPendingSets(): Promise<{ success: boolean }> {
+		const pending = this.setsInSession.filter((s) => !s.saved);
+		if (pending.length === 0) return { success: true };
+
+		let allOk = true;
+		for (const set of pending) {
+			const { success } = await this.saveSummary(set, { silent: true });
+			if (!success) allOk = false;
+		}
+
+		if (allOk) {
+			toast.success(pending.length > 1 ? `บันทึกผลทั้ง ${pending.length} เซตสำเร็จ` : 'บันทึกผลเซตสำเร็จ');
+		} else {
+			toast.error('บันทึกผลบางเซตไปยังเซิร์ฟเวอร์ไม่สำเร็จ (บันทึกไว้ในเครื่องแล้ว)');
+		}
+
+		return { success: allOk };
 	}
 
 	// Driven by the ESP32's physical buttons (GPIO32/33) over the telemetry SSE
@@ -267,15 +301,17 @@ class WorkoutManager {
 	// exact actions the on-screen buttons trigger (see PageLiveStudio/PagePostSet).
 	//
 	// Button A: a 3-press cycle -- start set -> stop set (go to summary) -> start
-	// the next set immediately (skipping the extra "เริ่มเซตถัดไป" click).
-	// Button B: stop the current set (if running) and save it, same as clicking
-	// "จบเซต & ดูสรุปผล" followed by "บันทึกผลเซสชันวันนี้".
+	// the next set immediately (skipping the extra "เริ่มเซตถัดไป" click, but still
+	// saving the finished set the same way that click does).
+	// Button B: stop the current set (if running) and save it with a visible toast,
+	// the same save that "จบการออกกำลังกาย" now performs silently before ending.
 	async handleRemoteButton(id: 'a' | 'b') {
 		if (id === 'a') {
 			if (this.isSetRunning) {
 				this.stopSet();
 				this.activeTab = 'postset';
 			} else if (this.activeTab === 'postset') {
+				if (this.lastCompletedSet) await this.saveSummary(this.lastCompletedSet, { silent: true });
 				this.nextSet();
 				this.startSet();
 				this.activeTab = 'studio';

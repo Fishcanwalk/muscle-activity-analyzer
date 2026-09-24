@@ -1,238 +1,96 @@
-# Cyberpump: Muscle Activity Analyzer 🏋️‍♂️📊
-> ระบบตรวจวัดและวิเคราะห์การทำงานของกล้ามเนื้อแบบเรียลไทม์ (Monorepo: Frontend + Backend + IoT Firmware)
+# Cyberpump: Muscle Activity Analyzer
 
-เอกสารนี้เป็นคู่มือสำหรับการนำระบบ (Deploy) ขึ้นสู่เซิร์ฟเวอร์ **GCC** (ครอบคลุมทั้ง **GDCC / Government Cloud** ของภาครัฐ/มหาวิทยาลัย และ **Google Cloud Platform / Compute Engine**) โดยใช้ **Docker & Docker Compose**
+> ระบบสำหรับติดตามการฝึกเวทและวิเคราะห์การทำงานของกล้ามเนื้อแบบเรียลไทม์ โดยเชื่อมข้อมูลจากกล้องและเซนเซอร์เข้ากับเว็บแดชบอร์ด
 
----
+Cyberpump ช่วยให้ผู้ฝึกเห็นทั้งจำนวนครั้ง คุณภาพของท่า และการตอบสนองของร่างกายระหว่างออกกำลังกาย ข้อมูลจากอุปกรณ์เซนเซอร์จะถูกส่งเข้าระบบเพื่อแสดงผลสด และนำไปสรุปผลเป็นรายเซตและรายเซสชัน
 
-## สารบัญ
-1. [ภาพรวมสถาปัตยกรรม (System Architecture)](#1-ภาพรวมสถาปัตยกรรม-system-architecture)
-2. [โครงสร้างโปรเจกต์แบบ Monorepo](#2-โครงสร้างโปรเจกต์แบบ-monorepo)
-3. [การเตรียม Cloud Server บน GCC](#3-การเตรียม-cloud-server-บน-gcc)
-4. [การติดตั้ง Docker บน Ubuntu Server](#4-การติดตั้ง-docker-บน-ubuntu-server)
-5. [ขั้นตอนการ Deploy ด้วย Docker Compose](#5-ขั้นตอนการ-deploy-ด้วย-docker-compose)
-6. [การตั้งค่า Nginx Reverse Proxy และ SSL (HTTPS)](#6-การตั้งค่า-nginx-reverse-proxy-และ-ssl-https)
-7. [การตั้งค่าฝั่ง IoT Sensor (ESP32) เข้าสู่ Cloud](#7-การตั้งค่าฝั่ง-iot-sensor-esp32-เข้าสู่-cloud)
-8. [คำสั่ง Maintenance & Operations](#8-คำสั่ง-maintenance--operations)
-9. [การแก้ไขปัญหาที่พบบ่อย (Troubleshooting)](#9-การแก้ไขปัญหาที่พบบ่อย-troubleshooting)
+## ฟีเจอร์หลัก
 
----
+- ติดตามการออกกำลังกายแบบเรียลไทม์ พร้อมจำนวนครั้ง ระยะการเคลื่อนไหว (ROM) ความเร็วการยก และการสูญเสียความเร็ว
+- วิเคราะห์จำนวนครั้งที่ทำได้ตามท่าและสัดส่วนความบริสุทธิ์ของท่า พร้อมแสดงคำเตือนระหว่างฝึก
+- แสดงข้อมูลจากเซนเซอร์ ได้แก่ sEMG, แรงกำจาก FSR, การเคลื่อนไหวจาก MPU6050, ชีพจรและ SpO₂ จาก MAX30102 และอุณหภูมิผิวจาก MLX90614
+- ใช้กล้องและ MediaPipe ตรวจจับการเคลื่อนไหวเพื่อช่วยนับครั้ง พร้อมตัวนับจาก OpenCV สำหรับตรวจสอบการเคลื่อนไหวอีกทาง
+- ปรับเทียบค่าเซนเซอร์ บันทึกผลการฝึก และดูสรุปเซตกับเซสชันย้อนหลัง
+- ส่งออกข้อมูลการวัดเป็น CSV หรือ JSON ได้
 
-## 1. ภาพรวมสถาปัตยกรรม (System Architecture)
+## ส่วนประกอบของระบบ
 
-ระบบประกอบด้วย 3 ส่วนหลักที่เชื่อมต่อกันภายใน Docker Network (`cyberpump-net`):
+| ส่วนประกอบ | หน้าที่                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `test-sensor/`     | เฟิร์มแวร์ ESP32 และ Arduino สำหรับอ่านเซนเซอร์และส่ง telemetry |
+
+ภาพรวมการไหลของข้อมูล:
 
 ```mermaid
-flowchart TB
-    subgraph IoT ["IoT Device (Sensors)"]
-        ESP32["ESP32 Firmware\n(sEMG + FSR + MPU6050 + MAX30102)"]
-    end
-
-    subgraph Internet ["Public Network"]
-        Browser["User Browser / Client"]
-        Nginx["Nginx Reverse Proxy\n(Port 80 / 443 SSL)"]
-    end
-
-    subgraph Docker ["Docker Network (cyberpump-net)"]
-        Frontend["cyberpump-frontend\n(SvelteKit Node.js SSR :3000)\n- Web UI Dashboard\n- Live Ingest (/api/telemetry)\n- API Proxy (/api/proxy/*)"]
-        Backend["cyberpump-backend\n(FastAPI Python 3.12 :9000)\n- Auth / JWT\n- Telemetry Storage API\n- Session Analytics"]
-        Mongo[("cyberpump-mongo\n(MongoDB 7 :27017)\nVolume: mongo_data")]
-    end
-
-    ESP32 -->|HTTP POST /api/telemetry| Nginx
-    Browser -->|HTTP/HTTPS Request| Nginx
-    Nginx -->|Proxy Pass :3000| Frontend
-    Nginx -.->|Optional Direct :9000| Backend
-    Frontend -->|Internal DNS http://backend:9000| Backend
-    Backend -->|Internal DNS mongodb://mongo:27017| Mongo
+flowchart LR
+    EMGFSR[sEMG + FSR] -->|Analog| Uno[Arduino Uno / Nano]
+    Uno -->|UART 9600 baud: ค่า sEMG + FSR| ESP32[ESP32]
+    OtherSensors[MPU6050 / MAX30102 / MLX90614] -->|I2C| ESP32
+    ESP32 -->|Wi-Fi: POST /api/telemetry| Web[SvelteKit: รับและกระจายข้อมูลสด]
+    Browser[เว็บเบราว์เซอร์] -->|ดู Dashboard| Web
+    Web -->|API| Backend[FastAPI]
+    Backend --> Mongo[(MongoDB)]
 ```
 
-### การไหลของข้อมูล (Data Flow)
-1. **IoT Telemetry**: บอร์ด ESP32 อ่านค่าเซ็นเซอร์ (EMG, FSR, อัตราการเต้นหัวใจ, อุณหภูมิ) แล้วยิง HTTP POST มาที่ `/api/telemetry` บน Frontend
-2. **Web Clients**: เบราว์เซอร์เข้าสู่ Web Dashboard ผ่าน Frontend (SvelteKit SSR)
-3. **Internal Proxy**: คำขอข้อมูลจากผู้ใช้จะวิ่งผ่าน SvelteKit Proxy ไปยัง FastAPI Backend ภายในเครือข่าย Docker โดยไม่ต้องออกสู่อินเทอร์เน็ตภายนอก
-4. **Database**: ข้อมูล Telemetry และบัญชีผู้ใช้ถูกจัดเก็บอย่างปลอดภัยใน MongoDB Volume
+Arduino อ่านค่า sEMG และ FSR แล้วส่งให้ ESP32 ผ่าน UART; ESP32 รวมค่ากับข้อมูลจากเซนเซอร์ที่ต่ออยู่กับตัวเอง ก่อนส่ง telemetry ผ่าน Wi-Fi ไปยังเว็บแอป
 
----
+ดูรายละเอียดการต่อเซนเซอร์และเฟิร์มแวร์ได้ที่ [`test-sensor/README.md`](test-sensor/README.md) และ [ผังขาอุปกรณ์](PINS.md)
 
-## 2. โครงสร้างโปรเจกต์แบบ Monorepo
+## เริ่มรันในเครื่อง
 
-```
-muscle-activity-analyzer/
-├── docker-compose.yml          # ไฟล์รวม Orchestration ทุก service สำหรับ deploy
-├── .env.example                # ตัวอย่าง Environment Variables ของทั้งระบบ
-├── backend/                    # FastAPI Backend Service
-│   ├── Dockerfile              # Dockerfile ของ Backend (Python 3.12-slim + Poetry)
-│   ├── pyproject.toml          # Poetry dependencies
-│   ├── app/                    # ซอร์สโค้ด API (Auth, Telemetry, Sessions, DB)
-│   └── .env.example
-├── frontend/                   # SvelteKit Web Application
-│   ├── Dockerfile              # Dockerfile ของ Frontend (Multi-stage Node 22 + pnpm)
-│   ├── package.json            # NPM dependencies (Svelte 5, Tailwind v4, adapter-node)
-│   ├── src/                    # ซอร์สโค้ด Web UI และ API proxy routes
-│   └── .env.example
-├── test-sensor/                # เฟิร์มแวร์ Arduino / ESP32 C++ สำหรับเซ็นเซอร์
-└── docs/                       # เอกสารการเชื่อมต่อเซ็นเซอร์และฮาร์ดแวร์
-```
+### สิ่งที่ต้องมี
 
----
+- Docker และ Docker Compose สำหรับ MongoDB
+- Python 3.11 ขึ้นไป และ Poetry
+- Node.js 20 ขึ้นไป พร้อม npm
 
-## 3. การเตรียม Cloud Server บน GCC
+### 1. เริ่ม MongoDB
 
-คำว่า **GCC** โดยทั่วไปในประเทศไทยมักหมายถึง:
-1. **GDCC / GCC (Government Data Center and Cloud)**: คลาวด์กลางภาครัฐ (เช่น ระบบคลาวด์ของ ม.สงขลานครินทร์ PSU หรือกระทรวง DE)
-2. **Google Cloud Platform (GCP / Compute Engine)**: บริการ Cloud VM ของ Google
-
-ทั้งสองระบบทำงานบน Linux VM เหมือนกัน โดยมีข้อกำหนดในการจัดเตรียมดังนี้:
-
-### 3.1 สเปกเซิร์ฟเวอร์ที่แนะนำ
-- **OS**: Ubuntu 22.04 LTS หรือ 24.04 LTS (64-bit)
-- **CPU**: 2 vCPU ขึ้นไป
-- **RAM**: ขั้นต่ำ 2 GB (หากใช้ 1 GB **ต้อง** ตั้งค่า Swap Memory เพิ่ม)
-- **Disk**: 20 GB SSD ขึ้นไป
-
-### 3.2 การตั้งค่า Firewall / Security Group
-เปิดพอร์ต (Inbound / Ingress Rules) ดังนี้:
-
-| Port | Protocol | แหล่งที่มา (Source) | วัตถุประสงค์ |
-| :--- | :--- | :--- | :--- |
-| **22** | TCP | `0.0.0.0/0` (หรือเจาะจง IP) | SSH เข้าจัดการเครื่อง |
-| **80** | TCP | `0.0.0.0/0` | HTTP สำหรับ Web และ Let's Encrypt SSL |
-| **443** | TCP | `0.0.0.0/0` | HTTPS สำหรับ Web Dashboard ปลอดภัย |
-| **3000** | TCP | `0.0.0.0/0` | SvelteKit Frontend (หากไม่ผ่าน Nginx) |
-| **9000** | TCP | `0.0.0.0/0` (หรือจำกัดเฉพาะ) | FastAPI Backend API |
-
-> [!WARNING]
-> **ห้ามเปิดพอร์ต 27017 (MongoDB) ออกสู่อินเทอร์เน็ตสาธารณะ** โดยใน `docker-compose.yml` ได้ตั้งค่า binding ไว้ที่ `127.0.0.1:27017` เพื่อความปลอดภัยสูงสุด
-
----
-
-## 4. การติดตั้ง Docker บน Ubuntu Server
-
-SSH เข้าสู่ Cloud Server ของคุณ:
 ```bash
-ssh username@<YOUR_SERVER_IP>
+cd backend
+docker compose up -d mongo
 ```
 
-### 4.1 อัปเดตระบบและตั้งค่า Swap (สำหรับเครื่อง RAM 1-2 GB)
-หากเซิร์ฟเวอร์มี RAM น้อย แนะนำให้สร้าง Swap 2GB เพื่อป้องกันปัญหา Memory เต็ม (Out of Memory - OOM) ระหว่าง Build Container:
+### 2. ตั้งค่าและเริ่ม Backend
+
+เปิดเทอร์มินัลใหม่:
+
 ```bash
-# ตรวจสอบ RAM
-free -h
-
-# สร้าง Swap 2GB (หากยังไม่มี)
-sudo fallocate -l 2G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-```
-
-### 4.2 ติดตั้ง Docker Engine และ Docker Compose V2
-รันคำสั่งด้านล่างเพื่อติดตั้ง Docker เวอร์ชันล่าสุดอย่างเป็นทางการ:
-```bash
-sudo apt update && sudo apt install -y ca-certificates curl gnupg lsb-release git
-
-# ติดตั้ง GPG key ของ Docker
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-# เพิ่ม Repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# ติดตั้ง Docker Engine และ Compose Plugin
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# อนุญาตให้ผู้ใช้ปัจจุบันรัน Docker โดยไม่ต้องใส่ sudo
-sudo usermod -aG docker $USER
-```
-
-> [!IMPORTANT]
-> หลังรันคำสั่ง `usermod` ให้ **Logout แล้ว Login เข้า SSH ใหม่** เพื่อให้สิทธิ์ group docker มีผล:
-> ```bash
-> exit
-> # SSH เข้ามาใหม่อีกครั้ง แล้วทดสอบ:
-> docker --version
-> docker compose version
-> ```
-
----
-
-## 5. ขั้นตอนการ Deploy ด้วย Docker Compose
-
-### 5.1 โคลนโปรเจกต์ Monorepo
-```bash
-git clone https://github.com/<your-org>/muscle-activity-analyzer.git
-cd muscle-activity-analyzer
-```
-
-### 5.2 ตั้งค่า Environment Variables
-คัดลอกไฟล์ตัวอย่าง `.env.example` มาเป็น `.env`:
-```bash
+cd backend
 cp .env.example .env
-nano .env
+poetry install
+poetry run uvicorn app.main:app --reload --port 9000
 ```
 
-ปรับแต่งค่าคอนฟิกสำคัญ:
-```env
-# ==========================================
-# Cyberpump Production Environment
-# ==========================================
+ไฟล์ตัวอย่างตั้งค่า MongoDB ให้ใช้ `localhost:27017` สำหรับการพัฒนาในเครื่อง หากปรับค่าการเชื่อมต่อหรือ secret ให้แก้ใน `backend/.env`
 
-# 1. ฐานข้อมูล MongoDB (เชื่อมต่อภายใน Docker network)
-MONGO_URI=mongodb://mongo:27017/cyberpump
+### 3. ตั้งค่าและเริ่ม Frontend
 
-# 2. Secret Key สำหรับ JWT Auth (สุ่มคีย์ปลอดภัยอย่างน้อย 32 ตัวอักษร)
-# สร้างได้ด้วยคำสั่ง: openssl rand -hex 32
-JWT_SECRET=ใส่_jwt_secret_ที่สุ่มขึ้นมาใหม่_ห้ามใช้ค่าเริ่มต้น
+เปิดอีกเทอร์มินัล:
 
-ACCESS_TTL_S=600
-REFRESH_TTL_S=604800
-
-# 3. Secret Token สำหรับการส่งข้อมูลจาก SvelteKit -> Backend
-TELEMETRY_SERVICE_TOKEN=ใส่_telemetry_token_ที่สุ่มขึ้นมาใหม่
-TELEMETRY_RETENTION_DAYS=90
-
-# 4. Frontend Configuration
-PUBLIC_APP_TITLE=Cyberpump
-
-# URL ที่ Frontend คุยกับ Backend (ภายใน Docker ใช้ชื่อ service 'backend')
-BACKEND_API_URL=http://backend:9000
-
-# ORIGIN ของเว็บสำหรับป้องกัน CSRF (ใส่ IP หรือ Domain ของ Cloud Server)
-# ตัวอย่าง: http://203.0.113.10:3000 หรือ https://cyberpump.yourdomain.com
-ORIGIN=http://<YOUR_SERVER_PUBLIC_IP>:3000
-```
-
-### 5.3 สั่ง Build และ Start Container
-รันคำสั่งเดียวที่ root ของโปรเจกต์:
 ```bash
-docker compose up -d --build
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
 ```
 
-Docker จะทำการ:
-1. ดึง Base image MongoDB 7
-2. Build Image ของ FastAPI Backend (`cyberpump-backend`)
-3. Build Image ของ SvelteKit Frontend (`cyberpump-frontend`)
-4. สร้าง Persistent Volume `cyberpump_mongo_data`
-5. เชื่อมต่อทั้ง 3 Service เข้าสู่ `cyberpump_network`
+เปิดเว็บที่ [http://localhost:5173](http://localhost:5173) โดย Frontend จะเชื่อมกับ Backend ที่ `http://localhost:9000` ตามค่าใน `frontend/.env.example`
 
-### 5.4 ตรวจสอบสถานะการทำงาน
-```bash
-# ตรวจสอบสถานะ Container (ต้องขึ้นสถานะ Up ทั้งหมด)
-docker compose ps
-```
+Backend สร้างบัญชีทดลองสำหรับพัฒนาไว้ให้ ใช้ `nont@cyberpump.io` และรหัสผ่าน `cyberpump123` เฉพาะในเครื่องพัฒนาเท่านั้น
 
-ผลลัพธ์ที่ถูกต้อง:
+หากต้องการนำระบบขึ้นเซิร์ฟเวอร์ ดู [คู่มือ Deploy](DEPLOYMENT.md)
+
+## โครงสร้าง Repository
+
 ```text
-NAME                 IMAGE                     STATUS         PORTS
-cyberpump-mongo      mongo:7                   Up (healthy)   127.0.0.1:27017->27017/tcp
-cyberpump-backend    muscle-activity-analyzer-backend    Up             0.0.0.0:9000->9000/tcp
-cyberpump-frontend   muscle-activity-analyzer-frontend   Up             0.0.0.0:3000->3000/tcp
+muscle-activity-analyzer/
+├── backend/       # FastAPI และการจัดเก็บข้อมูล
+├── frontend/      # SvelteKit เว็บแอป
+├── test-sensor/   # เฟิร์มแวร์และตัวอย่างทดสอบเซนเซอร์
+├── docs/          # เอกสารด้านเซนเซอร์และฮาร์ดแวร์
+├── DEPLOYMENT.md  # คู่มือ Deploy และดูแลระบบ
+└── PINS.md        # ผังขาอุปกรณ์
 ```
 
 ทดสอบการตอบสนองของ Backend Health Endpoint:
