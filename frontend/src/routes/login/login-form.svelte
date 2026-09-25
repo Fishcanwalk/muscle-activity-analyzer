@@ -75,27 +75,27 @@
 	<!-- Branding -->
 	<div class="space-y-1.5 text-center">
 		<div
-			class="mx-auto inline-flex items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 p-3 text-emerald-400"
+			class="mx-auto inline-flex items-center justify-center rounded-xl border border-border bg-muted p-3 text-emerald-600"
 		>
 			<Lightning size={26} weight="fill" />
 		</div>
-		<h1 class="text-2xl font-bold tracking-tight text-zinc-100">CYBERPUMP</h1>
-		<p class="text-sm text-zinc-400">เข้าสู่ระบบเพื่อดูข้อมูลการฝึกของคุณ</p>
+		<h1 class="text-2xl font-bold tracking-tight text-foreground">CYBERPUMP</h1>
+		<p class="text-sm text-muted-foreground">เข้าสู่ระบบเพื่อดูข้อมูลการฝึกของคุณ</p>
 	</div>
 
 	<!-- Login Form -->
-	<div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 shadow-sm">
+	<div class="rounded-2xl border border-border bg-card p-6 shadow-sm">
 		<form bind:this={formRef} class="grid gap-4" method="POST" use:enhance>
 			<Form.Field {form} name="email">
 				<Form.Control>
 					{#snippet children({ props })}
-						<Form.Label class="text-sm text-zinc-300">อีเมล</Form.Label>
+						<Form.Label class="text-sm text-foreground/80">อีเมล</Form.Label>
 						<Input
 							{...props}
 							type="email"
 							placeholder="nont@cyberpump.io"
 							bind:value={$formData.email}
-							class="h-10 border-zinc-800 bg-zinc-950 text-sm text-zinc-200"
+							class="h-10 border-border bg-muted/60 text-sm text-foreground"
 						/>
 					{/snippet}
 				</Form.Control>
@@ -104,19 +104,19 @@
 			<Form.Field {form} name="password">
 				<Form.Control>
 					{#snippet children({ props })}
-						<Form.Label class="text-sm text-zinc-300">รหัสผ่าน</Form.Label>
+						<Form.Label class="text-sm text-foreground/80">รหัสผ่าน</Form.Label>
 						<div class="relative">
 							<Input
 								{...props}
 								type={showPassword ? 'text' : 'password'}
 								placeholder="••••••"
 								bind:value={$formData.password}
-								class="h-10 border-zinc-800 bg-zinc-950 pr-10 text-sm text-zinc-200"
+								class="h-10 border-border bg-muted/60 pr-10 text-sm text-foreground"
 							/>
 							<button
 								type="button"
 								onclick={() => (showPassword = !showPassword)}
-								class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-zinc-500 hover:text-zinc-300"
+								class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground/80"
 								aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
 							>
 								{#if showPassword}
@@ -131,7 +131,7 @@
 				<Form.FieldErrors class="text-xs" />
 			</Form.Field>
 			{#if $message?.type === 'error'}
-				<div class="text-center text-xs text-rose-400">
+				<div class="text-center text-xs text-rose-600">
 					{$message.text}
 				</div>
 			{/if}
@@ -147,11 +147,11 @@
 	</div>
 
 	<!-- Demo Accounts (collapsed by default to keep the page focused on the real login form) -->
-	<div class="rounded-xl border border-zinc-800/80 bg-zinc-900/20">
+	<div class="rounded-xl border border-border bg-muted/50">
 		<button
 			type="button"
 			onclick={() => (showDemoAccounts = !showDemoAccounts)}
-			class="flex w-full items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400 hover:text-zinc-300"
+			class="flex w-full items-center justify-between px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground/80"
 		>
 			<span>ลองใช้บัญชีตัวอย่าง</span>
 			<CaretDown
@@ -166,21 +166,21 @@
 						type="button"
 						disabled={$submitting}
 						onclick={() => selectDemoUser(u.email)}
-						class="group flex w-full items-center justify-between rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5 text-left transition hover:border-zinc-700 hover:bg-zinc-800 disabled:opacity-50"
+						class="group flex w-full items-center justify-between rounded-lg border border-border bg-muted/60 p-2.5 text-left transition hover:border-border hover:bg-muted disabled:opacity-50"
 					>
 						<div class="flex items-center gap-2.5">
 							<span
-								class="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-xs font-semibold text-zinc-200 group-hover:border-zinc-700"
+								class="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-muted text-xs font-semibold text-foreground group-hover:border-border"
 							>
 								{demoInitials(u.name)}
 							</span>
 							<div>
 								<div
-									class="text-xs font-medium text-zinc-200 transition-colors group-hover:text-emerald-400"
+									class="text-xs font-medium text-foreground transition-colors group-hover:text-emerald-600"
 								>
 									{u.name}
 								</div>
-								<div class="text-[11px] text-zinc-400">
+								<div class="text-xs text-muted-foreground">
 									{u.email}
 								</div>
 							</div>
@@ -191,8 +191,8 @@
 		{/if}
 	</div>
 
-	<p class="text-center text-sm text-zinc-400">
+	<p class="text-center text-sm text-muted-foreground">
 		ยังไม่มีบัญชี?
-		<a href="/register" class="text-emerald-400 hover:underline">สมัครสมาชิก</a>
+		<a href="/register" class="text-emerald-600 hover:underline">สมัครสมาชิก</a>
 	</p>
 </div>
