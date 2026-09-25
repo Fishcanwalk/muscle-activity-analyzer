@@ -32,15 +32,15 @@
 			</span>
 			<div>
 				<div class="text-sm font-bold text-foreground">
-					{recording.isRecording ? 'กำลังบันทึกเซสชัน...' : 'บันทึกเซสชัน (Session Recording)'}
+					{recording.isRecording ? 'กำลังเก็บข้อมูลดิบ...' : 'Export ข้อมูลเซนเซอร์ดิบ (CSV / JSON)'}
 				</div>
 				<div class="text-xs text-muted-foreground">
 					{#if recording.isRecording}
 						{formatDuration(recording.durationMs)} · {recording.sampleCount} samples
 					{:else if recording.hasSamples}
-						บันทึกล่าสุด: {recording.sampleCount} samples ({formatDuration(recording.durationMs)})
+						เก็บล่าสุด: {recording.sampleCount} samples ({formatDuration(recording.durationMs)})
 					{:else}
-						ยังไม่มีข้อมูลที่บันทึก
+						เก็บไว้ในเบราว์เซอร์เพื่อดาวน์โหลดเท่านั้น ไม่ได้ส่งขึ้นเซิร์ฟเวอร์ (ผลแต่ละเซตบันทึกให้อัตโนมัติอยู่แล้ว)
 					{/if}
 					{#if recording.capReached}
 						<span class="text-amber-500"> · ถึงขีดจำกัดบัฟเฟอร์ หยุดบันทึกอัตโนมัติ</span>
@@ -57,10 +57,10 @@
 			>
 				{#if recording.isRecording}
 					<Stop size={14} weight="fill" />
-					<span>หยุดบันทึก</span>
+					<span>หยุดเก็บ</span>
 				{:else}
 					<Record size={14} weight="fill" />
-					<span>เริ่มบันทึก</span>
+					<span>เริ่มเก็บ</span>
 				{/if}
 			</Button>
 

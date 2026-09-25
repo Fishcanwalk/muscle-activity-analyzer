@@ -25,12 +25,12 @@
 	);
 	let hrrLabel = $derived(
 		hrrPeak === 0
-			? 'No Heart Rate Data'
+			? 'ไม่มีข้อมูลชีพจร'
 			: hrrDrop >= 30
-				? 'Excellent Recovery (>30 BPM drop in 1 min)'
+				? 'ฟื้นตัวดีมาก (ลดลงเกิน 30 BPM)'
 				: hrrDrop >= 15
-					? 'Good Recovery (15-30 BPM drop)'
-					: 'Needs More Rest (<15 BPM drop)'
+					? 'ฟื้นตัวดี (ลดลง 15–30 BPM)'
+					: 'ควรพักต่อ (ลดลงไม่ถึง 15 BPM)'
 	);
 	let hrrMessage = $derived(
 		hrrPeak === 0
@@ -42,96 +42,10 @@
 					: 'หัวใจยังฟื้นตัวไม่เต็มที่ แนะนำพักเพิ่มก่อนเริ่มเซตถัดไป'
 	);
 
-	let currentSummary = $derived(
-		workout.lastCompletedSet || {
-			setNumber: 2,
-			exercise: 'Biceps Curl',
-			weightKg: 12.5,
-			durationSeconds: 34,
-			totalReps: 8,
-			cleanReps: 7,
-			cheatedReps: 1,
-			formPurityPercent: 88,
-			effectiveReps: 4,
-			highTensionTutSeconds: 18.2,
-			reps: [
-				{
-					repNumber: 1,
-					concentricVelocity: 0.52,
-					rom: 123,
-					isClean: true,
-					velocityLossPercent: 0,
-					peakEmg: 470,
-					cheatReason: null
-				},
-				{
-					repNumber: 2,
-					concentricVelocity: 0.5,
-					rom: 124,
-					isClean: true,
-					velocityLossPercent: 4,
-					peakEmg: 480,
-					cheatReason: null
-				},
-				{
-					repNumber: 3,
-					concentricVelocity: 0.48,
-					rom: 122,
-					isClean: true,
-					velocityLossPercent: 8,
-					peakEmg: 485,
-					cheatReason: null
-				},
-				{
-					repNumber: 4,
-					concentricVelocity: 0.44,
-					rom: 123,
-					isClean: true,
-					velocityLossPercent: 15,
-					peakEmg: 490,
-					cheatReason: null
-				},
-				{
-					repNumber: 5,
-					concentricVelocity: 0.41,
-					rom: 125,
-					isClean: true,
-					velocityLossPercent: 21,
-					peakEmg: 505,
-					cheatReason: null
-				},
-				{
-					repNumber: 6,
-					concentricVelocity: 0.38,
-					rom: 124,
-					isClean: true,
-					velocityLossPercent: 27,
-					peakEmg: 512,
-					cheatReason: null
-				},
-				{
-					repNumber: 7,
-					concentricVelocity: 0.34,
-					rom: 122,
-					isClean: true,
-					velocityLossPercent: 35,
-					peakEmg: 520,
-					cheatReason: null
-				},
-				{
-					repNumber: 8,
-					concentricVelocity: 0.31,
-					rom: 120,
-					isClean: false,
-					cheatReason: 'Torso Swing',
-					velocityLossPercent: 40,
-					peakEmg: 490
-				}
-			],
-			timestamp: '18:32:10',
-			sessionId: null
-		}
-	);
+	// Null until a set has been finished this workout (e.g. the lifter opened this tab
+	// directly) -- the page then shows an empty state instead of a placeholder set, so
+	// nothing fake can ever be saved to the backend from here.
+	let currentSummary = $derived(workout.lastCompletedSet);
 
 	onMount(() => {
 		restTimer = setInterval(() => {
@@ -151,6 +65,7 @@
 	let isBusy = $state(false);
 
 	async function handleNextSet() {
+		if (!currentSummary) return;
 		isBusy = true;
 		await workout.saveSummary(currentSummary, { silent: true });
 		isBusy = false;
@@ -176,44 +91,6 @@
 </script>
 
 <div class="mx-auto flex max-w-6xl flex-col gap-6 p-6">
-	<!-- Rest Countdown Banner -->
-	<div
-		class="flex flex-wrap items-center justify-between gap-6 rounded-xl border border-cyan-500/30 bg-linear-to-r from-cyan-500/10 via-card to-emerald-500/5 p-6 shadow-xl"
-	>
-		<div>
-			<span class="flex items-center gap-2 text-xs font-bold tracking-wider text-cyan-400 uppercase">
-				<Timer class="h-4 w-4" /> กำลังพักฟื้นกล้ามเนื้อ (Rest Interval)
-			</span>
-			<div class="text-4xl font-black text-foreground">
-				{String(Math.floor(restSecondsLeft / 60)).padStart(2, '0')}:{String(
-					restSecondsLeft % 60
-				).padStart(2, '0')}
-			</div>
-			<p class="mt-1 text-xs text-muted-foreground">
-				การพัก 2–3 นาทีช่วยฟื้นฟู ATP-PC เพื่อรักษาแรงตึงเชิงกลในเซตถัดไป
-			</p>
-		</div>
-
-		<div class="flex flex-wrap gap-3">
-			<button
-				onclick={handleNextSet}
-				disabled={isBusy}
-				class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 disabled:opacity-50"
-			>
-				<span>{isBusy ? 'กำลังบันทึก...' : `เริ่มเซตถัดไป (Set #${currentSummary.setNumber + 1})`}</span>
-				<ArrowRight class="h-4 w-4" />
-			</button>
-			<button
-				onclick={handleEndWorkout}
-				disabled={isBusy}
-				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-400 hover:bg-rose-500/20 disabled:opacity-50"
-			>
-				<Flag class="h-4 w-4" />
-				<span>{isBusy ? 'กำลังบันทึก...' : 'บันทึกผลและจบการออกกำลังกาย'}</span>
-			</button>
-		</div>
-	</div>
-
 	{#if sessionSummary}
 		<!-- Whole-workout aggregate: every set completed since the sessionId was
 		     generated (first startSet()), across possibly multiple exercises. -->
@@ -221,10 +98,10 @@
 			class="flex flex-col gap-4 rounded-xl border border-emerald-500/30 bg-linear-to-r from-emerald-500/10 via-card to-cyan-500/5 p-6 shadow-xl"
 		>
 			<div>
-				<span class="flex items-center gap-2 text-xs font-bold tracking-wider text-emerald-400 uppercase">
+				<span class="flex items-center gap-2 text-sm font-semibold text-emerald-700">
 					<Flag class="h-4 w-4" /> Session Summary
 				</span>
-				<h3 class="mt-1 text-lg font-bold text-foreground">🏁 สรุปผลการออกกำลังกายวันนี้</h3>
+				<h3 class="mt-1 text-lg font-bold text-foreground">สรุปผลการออกกำลังกายวันนี้</h3>
 			</div>
 
 			<div class="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -241,23 +118,23 @@
 				</div>
 
 				<div class="rounded-lg border border-border bg-background/50 p-3">
-					<span class="text-xs text-muted-foreground">Total / Clean Reps</span>
+					<span class="text-sm text-muted-foreground">ครั้งทั้งหมด / คลีน</span>
 					<div class="text-xl font-black text-foreground">
 						{sessionSummary.totalReps}
-						<span class="text-xs font-normal text-muted-foreground">/ {sessionSummary.cleanReps} Clean</span>
+						<span class="text-xs font-normal text-muted-foreground">/ คลีน {sessionSummary.cleanReps}</span>
 					</div>
 				</div>
 
 				<div class="rounded-lg border border-border bg-background/50 p-3">
 					<span class="text-xs text-muted-foreground">ปริมาณงานรวม (Volume)</span>
-					<div class="text-xl font-black text-emerald-400">
+					<div class="text-xl font-black text-emerald-600">
 						{sessionSummary.totalVolumeKg.toFixed(1)} <span class="text-xs font-normal text-muted-foreground">kg</span>
 					</div>
 				</div>
 
 				<div class="rounded-lg border border-border bg-background/50 p-3">
 					<span class="text-xs text-muted-foreground">Form Purity เฉลี่ย</span>
-					<div class="text-xl font-black text-cyan-400">{sessionSummary.avgFormPurityPercent}%</div>
+					<div class="text-xl font-black text-cyan-600">{sessionSummary.avgFormPurityPercent}%</div>
 				</div>
 			</div>
 
@@ -269,36 +146,72 @@
 				<ArrowRight class="h-4 w-4" />
 			</button>
 		</div>
-	{/if}
+	{:else if currentSummary}
+	<!-- Rest Countdown Banner -->
+	<div
+		class="flex flex-wrap items-center justify-between gap-6 rounded-xl border border-cyan-500/30 bg-linear-to-r from-cyan-500/10 via-card to-emerald-500/5 p-6 shadow-xl"
+	>
+		<div>
+			<span class="flex items-center gap-2 text-sm font-semibold text-cyan-700">
+				<Timer class="h-4 w-4" /> เวลาพักก่อนเซตถัดไป
+			</span>
+			<div class="text-4xl font-black text-foreground">
+				{String(Math.floor(restSecondsLeft / 60)).padStart(2, '0')}:{String(
+					restSecondsLeft % 60
+				).padStart(2, '0')}
+			</div>
+			<p class="mt-1 text-sm text-muted-foreground">
+				พัก 2–3 นาทีให้กล้ามเนื้อฟื้นแรงก่อนเริ่มเซตถัดไป
+			</p>
+		</div>
+
+		<div class="flex flex-wrap gap-3">
+			<button
+				onclick={handleNextSet}
+				disabled={isBusy}
+				class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 disabled:opacity-50"
+			>
+				<span>{isBusy ? 'กำลังบันทึก...' : `เริ่มเซตถัดไป (Set #${currentSummary.setNumber + 1})`}</span>
+				<ArrowRight class="h-4 w-4" />
+			</button>
+			<button
+				onclick={handleEndWorkout}
+				disabled={isBusy}
+				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-600 hover:bg-rose-500/20 disabled:opacity-50"
+			>
+				<Flag class="h-4 w-4" />
+				<span>{isBusy ? 'กำลังบันทึก...' : 'บันทึกผลและจบการออกกำลังกาย'}</span>
+			</button>
+		</div>
+	</div>
 
 	<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
 		<!-- Left: Stimulus Scorecard & Audit -->
 		<div class="flex flex-col gap-6">
 			<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-				<span class="text-xs font-bold text-cyan-400 uppercase">Session Breakdown</span>
-				<h3 class="mt-1 text-lg font-bold text-foreground">
-					🎯 Hypertrophy Stimulus Scorecard (เซต #{currentSummary.setNumber})
+				<h3 class="text-lg font-bold text-foreground">
+					สรุปเซต #{currentSummary.setNumber}
 				</h3>
 
 				<div class="mt-4 grid grid-cols-2 gap-3">
 					<div class="rounded-lg border border-border bg-background/50 p-3">
-						<span class="text-xs text-muted-foreground">Total / Clean Reps</span>
+						<span class="text-sm text-muted-foreground">ครั้งทั้งหมด / คลีน</span>
 						<div class="text-xl font-black text-foreground">
-							{currentSummary.totalReps} <span class="text-xs font-normal text-muted-foreground">/ {currentSummary.cleanReps} Clean</span>
+							{currentSummary.totalReps} <span class="text-xs font-normal text-muted-foreground">/ คลีน {currentSummary.cleanReps}</span>
 						</div>
-						<span class="text-xs text-emerald-400">{currentSummary.formPurityPercent}% Purity</span>
+						<span class="text-xs text-emerald-600">คลีน {currentSummary.formPurityPercent}%</span>
 					</div>
 
 					<div class="rounded-lg border border-border bg-background/50 p-3">
-						<span class="text-xs text-muted-foreground">Effective Reps</span>
-						<div class="text-xl font-black text-emerald-400">
+						<span class="text-sm text-muted-foreground">ครั้งที่กระตุ้นกล้ามเนื้อ</span>
+						<div class="text-xl font-black text-emerald-600">
 							{currentSummary.effectiveReps} <span class="text-xs font-normal text-muted-foreground">reps</span>
 						</div>
-						<span class="text-xs text-cyan-400">Optimal Stimulus Zone</span>
+						<span class="text-xs text-cyan-600">ช้าลง ≥ 25% จากครั้งแรก</span>
 					</div>
 
 					<div class="rounded-lg border border-border bg-background/50 p-3">
-						<span class="text-xs text-muted-foreground">High-Tension TUT</span>
+						<span class="text-sm text-muted-foreground">เวลาเกร็งหนัก</span>
 						<div class="text-xl font-black text-foreground">
 							{currentSummary.highTensionTutSeconds} <span class="text-xs font-normal text-muted-foreground">s</span>
 						</div>
@@ -306,20 +219,19 @@
 					</div>
 
 					<div class="rounded-lg border border-border bg-background/50 p-3">
-						<span class="text-xs text-muted-foreground">Muscle Pump (MLX90614)</span>
-						<div class="text-xl font-black text-amber-400">
+						<span class="text-sm text-muted-foreground">อุณหภูมิกล้ามเนื้อเพิ่มขึ้น</span>
+						<div class="text-xl font-black text-amber-600">
 							{telemetry.vitals.deltaTemp >= 0 ? '+' : ''}{formatDec(telemetry.vitals.deltaTemp)} <span class="text-xs font-normal text-muted-foreground">°C</span>
 						</div>
-						<span class="text-xs text-amber-400">Local Hyperemia 🔥</span>
+						<span class="text-xs text-amber-600">เลือดไหลเวียนมากขึ้น (pump)</span>
 					</div>
 				</div>
 			</div>
 
 			<!-- Anti-Cheat Audit -->
 			<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-				<span class="text-xs font-bold text-cyan-400 uppercase">MediaPipe Anti-Cheat Audit</span>
-				<h3 class="mt-1 text-lg font-bold text-foreground">
-					🕵️ รายงานการโกงท่าทาง (Form Breakdown Audit)
+				<h3 class="text-lg font-bold text-foreground">
+					การตรวจท่าโกง
 				</h3>
 
 				<div class="mt-3">
@@ -337,7 +249,7 @@
 							</div>
 						</div>
 					{:else}
-						<div class="flex gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-400">
+						<div class="flex gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600">
 							<CheckCircle2 class="h-5 w-5 shrink-0" />
 							<div>
 								<strong>ยอดเยี่ยม! ไม่พบการโกงท่าทางในเซตนี้</strong>
@@ -350,7 +262,7 @@
 				</div>
 
 				<div class="mt-4 rounded-lg border-l-4 border-cyan-500 bg-background/50 p-3 text-xs text-muted-foreground">
-					<strong class="text-cyan-400">💡 คำแนะนำเชิงวิทยาศาสตร์สำหรับเซตถัดไป:</strong>
+					<strong class="text-cyan-700">คำแนะนำสำหรับเซตถัดไป:</strong>
 					<p class="mt-1">
 						ล็อกข้อศอกให้อยู่ข้างลำตัวก่อนเริ่มงอแขน หากครั้งสุดท้ายเริ่มยกไม่ขึ้น ให้ลดความเร็วลงอย่างช้าๆ (Eccentric Control) แทนการเหวี่ยงตัว
 					</p>
@@ -361,18 +273,17 @@
 		<!-- Right: Velocity Loss Table & HRR -->
 		<div class="flex flex-col gap-6">
 			<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-				<span class="text-xs font-bold text-cyan-400 uppercase">MPU-6050 (VBT Analytics)</span>
-				<h3 class="mt-1 text-lg font-bold text-foreground">📉 Rep-by-Rep Velocity Loss Curve</h3>
+				<h3 class="text-lg font-bold text-foreground">ความเร็วแต่ละครั้ง</h3>
 
 				<div class="mt-3 overflow-x-auto">
-					<table class="w-full text-left text-xs">
+					<table class="w-full text-left text-sm">
 						<thead>
-							<tr class="border-b border-border text-muted-foreground uppercase">
-								<th class="py-2">Rep #</th>
-								<th>Velocity</th>
-								<th>Loss</th>
-								<th>ROM</th>
-								<th>Form</th>
+							<tr class="border-b border-border text-muted-foreground">
+								<th class="py-2 font-medium">ครั้งที่</th>
+								<th class="font-medium">ความเร็ว</th>
+								<th class="font-medium">ช้าลง</th>
+								<th class="font-medium">ROM</th>
+								<th class="font-medium">ท่า</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-border">
@@ -383,7 +294,7 @@
 									<td>
 										<span
 											class="rounded px-1.5 py-0.5 font-bold {r.velocityLossPercent >= 30
-												? 'bg-emerald-500/20 text-emerald-400'
+												? 'bg-emerald-500/20 text-emerald-600'
 												: 'text-foreground'}"
 										>
 											{r.velocityLossPercent}%
@@ -392,7 +303,7 @@
 									<td>{r.rom}°</td>
 									<td>
 										{#if r.isClean}
-											<span class="rounded bg-emerald-500/20 px-1.5 py-0.5 font-bold text-emerald-400">
+											<span class="rounded bg-emerald-500/20 px-1.5 py-0.5 font-bold text-emerald-600">
 												Clean
 											</span>
 										{:else}
@@ -410,42 +321,56 @@
 
 			<!-- 1-Minute Heart Rate Recovery -->
 			<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-				<span class="text-xs font-bold text-cyan-400 uppercase">MAX30102 Cardiovascular Recovery</span>
-				<h3 class="mt-1 text-lg font-bold text-foreground">💓 1-Minute Heart Rate Recovery (HRR)</h3>
+				<h3 class="text-lg font-bold text-foreground">การฟื้นตัวของหัวใจ</h3>
 
 				<div class="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-border bg-background/50 p-4 text-center">
 					<div>
-						<span class="text-xs text-muted-foreground">Peak ขณะยก</span>
+						<span class="text-sm text-muted-foreground">สูงสุดขณะยก</span>
 						<div class="text-lg font-black text-destructive">{hrrPeak} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 					<div>
-						<span class="text-xs text-muted-foreground">ปัจจุบัน (พัก)</span>
-						<div class="text-lg font-black text-emerald-400">{hrrCurrent} <span class="text-xs font-normal">BPM</span></div>
+						<span class="text-sm text-muted-foreground">ตอนนี้ (พัก)</span>
+						<div class="text-lg font-black text-emerald-600">{hrrCurrent} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 					<div>
-						<span class="text-xs text-muted-foreground">อัตราลดลง (HRR)</span>
-						<div class="text-lg font-black text-cyan-400">{-hrrDrop} <span class="text-xs font-normal">BPM</span></div>
+						<span class="text-sm text-muted-foreground">ลดลง</span>
+						<div class="text-lg font-black text-cyan-600">{-hrrDrop} <span class="text-xs font-normal">BPM</span></div>
 					</div>
 				</div>
 
 				<div class="mt-3">
 					<span
 						class="rounded-full border px-3 py-0.5 text-xs font-bold {hrrTone === 'emerald'
-							? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+							? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-600'
 							: hrrTone === 'cyan'
-								? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-400'
+								? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-600'
 								: hrrTone === 'amber'
-									? 'border-amber-500/40 bg-amber-500/15 text-amber-400'
+									? 'border-amber-500/40 bg-amber-500/15 text-amber-600'
 									: 'border-border bg-muted/30 text-muted-foreground'}"
 					>
 						{hrrLabel}
 					</span>
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-sm text-muted-foreground">
 						{hrrMessage}
 					</p>
 				</div>
 			</div>
 		</div>
 	</div>
+	{:else}
+	<div class="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-10 text-center shadow-md">
+		<h3 class="text-lg font-bold text-foreground">ยังไม่มีเซตที่จบในการออกกำลังกายนี้</h3>
+		<p class="max-w-md text-sm text-muted-foreground">
+			เริ่มเซตที่ Live Studio แล้วกด "จบเซต" สรุปผลของเซตนั้นจะแสดงที่นี่
+		</p>
+		<button
+			onclick={onStartNextSet}
+			class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400"
+		>
+			<span>ไปที่ Live Studio</span>
+			<ArrowRight class="h-4 w-4" />
+		</button>
+	</div>
+	{/if}
 </div>
 

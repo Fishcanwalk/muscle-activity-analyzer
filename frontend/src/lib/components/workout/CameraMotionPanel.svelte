@@ -10,7 +10,7 @@
 				? 'bg-amber-500'
 				: status === 'error'
 					? 'bg-destructive'
-					: 'bg-zinc-600';
+					: 'bg-muted-foreground/50';
 	}
 
 	function statusLabel(status: typeof cameraRepCounter.status) {
@@ -21,33 +21,33 @@
 	}
 </script>
 
-<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 shadow-sm">
-	<div class="flex items-center justify-between border-b border-zinc-800/60 pb-2">
+<div class="rounded-xl border border-border bg-muted/50 p-3.5 shadow-sm">
+	<div class="flex items-center justify-between border-b border-border pb-2">
 		<div class="flex items-center gap-2">
 			<span class="h-1.5 w-1.5 rounded-full {statusDotClass(cameraRepCounter.status)}"></span>
-			<span class="font-mono text-[10px] font-bold tracking-wider text-cyan-400 uppercase">
+			<span class="font-mono text-xs font-bold tracking-wider text-cyan-600 uppercase">
 				OpenCV.js Motion Diff
 			</span>
-			<span class="text-zinc-600">·</span>
-			<h4 class="text-xs font-semibold text-zinc-200">ตัวนับครั้งแบบ Cross-Check</h4>
+			<span class="text-muted-foreground/70">·</span>
+			<h4 class="text-xs font-semibold text-foreground">ตัวนับครั้งแบบ Cross-Check</h4>
 		</div>
-		<Waveform size={14} class="text-zinc-400" />
+		<Waveform size={14} class="text-muted-foreground" />
 	</div>
 
 	<div class="flex items-center justify-between py-2">
-		<div class="text-[11px] font-mono text-zinc-400">{statusLabel(cameraRepCounter.status)}</div>
+		<div class="text-xs font-mono text-muted-foreground">{statusLabel(cameraRepCounter.status)}</div>
 		{#if cameraRepCounter.status === 'error'}
-			<span class="max-w-[60%] text-right text-[10px] text-destructive">{cameraRepCounter.errorMsg}</span>
+			<span class="max-w-[60%] text-right text-xs text-destructive">{cameraRepCounter.errorMsg}</span>
 		{/if}
 	</div>
 
 	<div class="grid grid-cols-2 gap-2.5">
-		<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-			<div class="mb-0.5 font-mono text-[11px] text-zinc-400">Motion Level</div>
-			<div class="font-mono text-xl font-bold text-zinc-100">
-				{cameraRepCounter.motionLevel}<span class="font-sans text-xs font-normal text-zinc-400">%</span>
+		<div class="rounded-lg border border-border bg-muted/60 p-2.5">
+			<div class="mb-0.5 font-mono text-xs text-muted-foreground">Motion Level</div>
+			<div class="font-mono text-xl font-bold text-foreground">
+				{cameraRepCounter.motionLevel}<span class="font-sans text-xs font-normal text-muted-foreground">%</span>
 			</div>
-			<div class="relative mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+			<div class="relative mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
 				<div
 					class="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-100"
 					style="width: {cameraRepCounter.motionLevel}%;"
@@ -55,16 +55,16 @@
 			</div>
 		</div>
 
-		<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-			<div class="mb-0.5 font-mono text-[11px] text-zinc-400">Motion-Based Reps</div>
-			<div class="font-mono text-xl font-bold text-zinc-100">
+		<div class="rounded-lg border border-border bg-muted/60 p-2.5">
+			<div class="mb-0.5 font-mono text-xs text-muted-foreground">Motion-Based Reps</div>
+			<div class="font-mono text-xl font-bold text-foreground">
 				{cameraRepCounter.repCount}
-				<span class="font-sans text-xs font-normal text-zinc-400">/ {workout.totalReps} official</span>
+				<span class="font-sans text-xs font-normal text-muted-foreground">/ {workout.totalReps} official</span>
 			</div>
 		</div>
 	</div>
 
-	<div class="mt-2 flex items-start gap-1.5 border-t border-zinc-800/80 pt-2 text-[10px] text-zinc-500">
+	<div class="mt-2 flex items-start gap-1.5 border-t border-border pt-2 text-xs text-muted-foreground">
 		<Info size={12} class="mt-0.5 shrink-0" />
 		<span>
 			ประมาณการจาก frame-differencing แบบ OpenCV คลาสสิก (ไม่ใช้โมเดล pose/ML) เป็นค่าเปรียบเทียบเท่านั้น

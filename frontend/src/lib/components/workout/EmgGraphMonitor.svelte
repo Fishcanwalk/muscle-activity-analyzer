@@ -1,22 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
-	import { formatDec } from '$lib/utils/format';
 	import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
-	import {
-		Lightning,
-		Play,
-		Pause,
-		ArrowsOut,
-		Clock,
-		Sliders,
-		CheckCircle,
-		Pulse,
-		Cpu,
-		ArrowClockwise,
-		Copy,
-		Check
-	} from 'phosphor-svelte';
+	import { Play, Pause, Pulse, ArrowClockwise } from 'phosphor-svelte';
 
 	let canvasElement: HTMLCanvasElement | null = $state(null);
 	let animationFrameId: number | null = null;
@@ -25,21 +11,16 @@
 	let gain = $state<number>(1); // 1x, 2x, 0.5x
 	let timeWindowSec = $state<number>(4); // 2s, 4s, 8s
 	let isPaused = $state<boolean>(false);
-	let showApiHelper = $state<boolean>(false);
-	let copiedCurl = $state<boolean>(false);
 
 	// Running metrics
 	let peakUv = $state<number>(0);
 	let meanRms = $state<number>(0);
 	let rmsHistory: number[] = [];
 
-	// The server sends amplitude in µV (a lab unit gym users don't recognize) plus an
-	// already-calibrated %MVC figure for the current sample. We reuse that same
-	// µV-to-%MVC ratio to express peak/mean amplitude in the same familiar "% of max
-	// effort" scale, instead of showing a second, unrelated unit.
-	let mvcRatio = $derived(telemetry.emg.rms > 0 ? telemetry.emg.mvcPercent / telemetry.emg.rms : 0);
-	let peakPercent = $derived(Math.min(999, Math.round(peakUv * mvcRatio)));
-	let meanPercent = $derived(Math.round(meanRms * mvcRatio));
+	// Amplitudes arrive on a µV-like scale; users see them as % of their calibrated MVC.
+	const toPct = (uv: number) => Math.round((uv / (telemetry.serverCalibration.emgMvc || 1)) * 100);
+	let peakPercent = $derived(Math.min(999, toPct(peakUv)));
+	let meanPercent = $derived(toPct(meanRms));
 
 	// Local buffer for rendering, kept in sync with the server's rolling EMG buffer
 	// (same size, shared via EMG_BUFFER_SIZE) so every sample that arrives gets drawn.
@@ -77,118 +58,108 @@
 
 		const width = canvasElement.width;
 		const height = canvasElement.height;
-		const centerY = height / 2;
+		const left = 45;
+		const bottom = height - 4;
+		const plotH = bottom - 6;
 
-		// Clear canvas with dark zinc background
-		ctx.fillStyle = '#09090b';
+		ctx.fillStyle = '#ffffff';
 		ctx.fillRect(0, 0, width, height);
 
-		// Grid lines & scales. The raw trace is in µV internally, but gym users don't
-		// think in microvolts, so the axis is labeled by effort level instead of the
-		// underlying lab unit.
-		const maxDisplayUv = 600 / gain;
-		const gridSteps = 4;
+		// The module's SIG output is already an envelope (≥ 0), so the trace is drawn
+		// one-sided from the bottom and scaled in % of this user's calibrated MVC -- the
+		// same units the rep thresholds use, so the lines below are exactly what counts.
+		const cal = telemetry.serverCalibration;
+		const mvcUv = cal.emgMvc || 1;
+		const maxPct = 120 / gain;
+		const yOf = (pct: number) => bottom - (Math.min(pct, maxPct) / maxPct) * plotH;
+
 		ctx.lineWidth = 1;
-
-		for (let i = -gridSteps; i <= gridSteps; i++) {
-			const y = centerY + (i * (height / 2)) / gridSteps;
-			const levelLabel =
-				i === 0 ? 'พัก' : i === -gridSteps ? 'ออกแรงมาก' : i === gridSteps ? 'ออกแรงมาก' : '';
-
-			ctx.strokeStyle = i === 0 ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.04)';
+		ctx.font = '12px ui-sans-serif, sans-serif';
+		ctx.textAlign = 'right';
+		const gridStep = maxPct > 150 ? 50 : 25;
+		for (let pct = 0; pct <= maxPct; pct += gridStep) {
+			const y = yOf(pct);
+			ctx.strokeStyle = pct === 0 ? 'rgba(0, 0, 0, 0.18)' : 'rgba(0, 0, 0, 0.06)';
 			ctx.beginPath();
-			ctx.moveTo(45, y);
+			ctx.moveTo(left, y);
 			ctx.lineTo(width, y);
 			ctx.stroke();
-
-			if (levelLabel) {
-				ctx.fillStyle = i === 0 ? '#a1a1aa' : '#52525b';
-				ctx.font = '10px ui-sans-serif, sans-serif';
-				ctx.textAlign = 'right';
-				ctx.fillText(levelLabel, 40, y + 3);
-			}
+			ctx.fillStyle = '#71717a';
+			ctx.fillText(`${pct}%`, left - 6, y + 3);
 		}
 
-		// Vertical time grid lines
 		const timeSteps = 8;
 		for (let j = 1; j <= timeSteps; j++) {
-			const x = 45 + ((width - 45) / timeSteps) * j;
-			ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+			const x = left + ((width - left) / timeSteps) * j;
+			ctx.strokeStyle = 'rgba(0, 0, 0, 0.04)';
 			ctx.beginPath();
 			ctx.moveTo(x, 0);
-			ctx.lineTo(x, height);
+			ctx.lineTo(x, bottom);
 			ctx.stroke();
 		}
 
-		// Reference line marking the "high effort" zone (280 µV internally, see
-		// telemetryStore.ts) — shown to the user as a plain effort threshold, not a voltage.
-		const tensionY = centerY - (280 / maxDisplayUv) * (height / 2);
-		ctx.setLineDash([4, 4]);
-		ctx.strokeStyle = 'rgba(16, 185, 129, 0.4)';
-		ctx.beginPath();
-		ctx.moveTo(45, tensionY);
-		ctx.lineTo(width, tensionY);
-		ctx.stroke();
-
-		ctx.fillStyle = '#10b981';
-		ctx.font = '9px ui-sans-serif, sans-serif';
+		// Rep-counting thresholds (emgRepDetector.ts): start / end of a contraction and
+		// the "real effort" peak a clean rep must reach.
+		const thresholds = [
+			{ pct: cal.emgRepPeakPct, color: '#7c3aed', dash: [2, 3], label: `ออกแรงจริง ${cal.emgRepPeakPct}%` },
+			{ pct: cal.emgRepOnPct, color: '#059669', dash: [6, 4], label: `เริ่มเกร็ง ${cal.emgRepOnPct}%` },
+			{ pct: cal.emgRepOffPct, color: '#d97706', dash: [6, 4], label: `จบ rep ${cal.emgRepOffPct}%` }
+		];
 		ctx.textAlign = 'left';
-		ctx.fillText('โซนออกแรงหนัก', width - 100, tensionY - 4);
+		ctx.font = '12px ui-sans-serif, sans-serif';
+		for (const t of thresholds) {
+			const y = yOf(t.pct);
+			ctx.setLineDash(t.dash);
+			ctx.strokeStyle = t.color;
+			ctx.beginPath();
+			ctx.moveTo(left, y);
+			ctx.lineTo(width, y);
+			ctx.stroke();
+			ctx.fillStyle = t.color;
+			ctx.fillText(t.label, width - 120, y - 4);
+		}
 		ctx.setLineDash([]);
 
-		// Draw RMS Envelope area
-		ctx.beginPath();
-		const stepX = (width - 45) / (waveBuffer.length - 1);
-		ctx.moveTo(45, centerY);
+		const stepX = (width - left) / (waveBuffer.length - 1);
+		const contracting = telemetry.emgRep.state === 'CONTRACT';
 
+		ctx.beginPath();
+		ctx.moveTo(left, bottom);
 		for (let i = 0; i < waveBuffer.length; i++) {
-			const x = 45 + i * stepX;
-			const val = waveBuffer[i];
-			const scaledVal = (Math.abs(val) / maxDisplayUv) * (height / 2);
-			const y = centerY - Math.min(height / 2 - 2, scaledVal);
-			ctx.lineTo(x, y);
+			ctx.lineTo(left + i * stepX, yOf((Math.max(0, waveBuffer[i]) / mvcUv) * 100));
 		}
-		ctx.lineTo(width, centerY);
+		ctx.lineTo(width, bottom);
 		ctx.closePath();
-		ctx.fillStyle = 'rgba(16, 185, 129, 0.08)';
+		ctx.fillStyle = contracting ? 'rgba(16, 185, 129, 0.18)' : 'rgba(16, 185, 129, 0.08)';
 		ctx.fill();
 
-		// Draw Raw sEMG Waveform
 		ctx.beginPath();
 		ctx.lineWidth = 1.8;
-		ctx.strokeStyle = telemetry.emg.isHighTension ? '#10b981' : '#34d399';
-		ctx.shadowColor = telemetry.emg.isHighTension ? 'rgba(16, 185, 129, 0.6)' : 'transparent';
-		ctx.shadowBlur = telemetry.emg.isHighTension ? 8 : 0;
-
+		ctx.strokeStyle = contracting ? '#047857' : '#059669';
 		for (let i = 0; i < waveBuffer.length; i++) {
-			const x = 45 + i * stepX;
-			const val = waveBuffer[i];
-			const scaledVal = (val / maxDisplayUv) * (height / 2);
-			const y = centerY - Math.max(-height / 2 + 2, Math.min(height / 2 - 2, scaledVal));
-
+			const x = left + i * stepX;
+			const y = yOf((Math.max(0, waveBuffer[i]) / mvcUv) * 100);
 			if (i === 0) ctx.moveTo(x, y);
 			else ctx.lineTo(x, y);
 		}
 		ctx.stroke();
-		ctx.shadowBlur = 0; // reset
 	}
 
 	function resetPeak() {
 		peakUv = telemetry.emg.rms;
 	}
 
-	function statusDotClass(status: 'live' | 'stale' | 'never') {
-		return status === 'live' ? 'bg-emerald-500' : status === 'stale' ? 'bg-amber-500' : 'bg-zinc-600';
-	}
+	const STATUS = {
+		live: { dot: 'bg-emerald-500', label: 'สัญญาณปกติ' },
+		stale: { dot: 'bg-amber-500', label: 'สัญญาณขาด' },
+		never: { dot: 'bg-muted-foreground/40', label: 'ไม่พบเซนเซอร์' }
+	} as const;
 
-	function copyCurlCode() {
-		const code = `curl -X POST http://localhost:5173/api/emg \\
-  -H "Content-Type: application/json" \\
-  -d '{"raw": 2200, "rms": 285.5, "mvcPercent": 52, "board": "esp32"}'`;
-		navigator.clipboard.writeText(code);
-		copiedCurl = true;
-		setTimeout(() => (copiedCurl = false), 2000);
-	}
+	const ZOOMS = [
+		{ value: 0.5, label: '0.5×', title: 'ซูมออก' },
+		{ value: 1, label: '1×', title: 'ขนาดปกติ' },
+		{ value: 2, label: '2×', title: 'ซูมเข้า' }
+	];
 
 	onMount(() => {
 		// Auto-resize canvas buffer to actual CSS pixels
@@ -211,185 +182,78 @@
 	});
 </script>
 
-<div class="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3 font-sans antialiased text-zinc-100">
-	<!-- Header & Status Row -->
-	<div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
-		<div class="flex items-center gap-2.5">
-			<div class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-emerald-400">
-				<Pulse size={18} weight="bold" />
-			</div>
-			<div>
-				<div class="flex items-center gap-2">
-					<h3 class="text-sm font-bold text-zinc-100 uppercase tracking-wide">sEMG Real-Time Waveform</h3>
-					<span class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono {telemetry.isWsConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'}">
-						<span class="w-1.5 h-1.5 rounded-full {telemetry.isWsConnected ? 'bg-emerald-500' : 'bg-zinc-500'}"></span>
-						{telemetry.isWsConnected ? 'HARDWARE LIVE' : 'HARDWARE OFFLINE'}
-					</span>
-					<span
-						class="flex items-center gap-1 px-2 py-0.2 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700"
-						title="EMG sensor: {telemetry.sensorStatus.emg}"
-					>
-						<span class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.emg)}"></span>
-						EMG
-					</span>
-				</div>
-				<p class="text-[11px] text-zinc-400 font-mono">
-					คลื่นสัญญาณกล้ามเนื้อแบบเรียลไทม์ — ยิ่งคลื่นสูง ยิ่งออกแรงมาก
-				</p>
-			</div>
+<div class="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
+	<div class="flex flex-wrap items-start justify-between gap-3">
+		<div>
+			<h3 class="flex items-center gap-2 text-base font-semibold text-foreground">
+				<Pulse size={18} class="text-emerald-600" />
+				คลื่นกล้ามเนื้อ (sEMG)
+			</h3>
+			<p class="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+				<span class={['h-2 w-2 rounded-full', STATUS[telemetry.sensorStatus.emg].dot]}></span>
+				{STATUS[telemetry.sensorStatus.emg].label}
+			</p>
 		</div>
+		<span
+			class={[
+				'rounded-full px-3 py-1 text-sm font-semibold',
+				telemetry.emgRep.state === 'CONTRACT'
+					? 'bg-emerald-500/15 text-emerald-700'
+					: 'bg-muted text-muted-foreground'
+			]}
+			title="สถานะตัวนับ rep จาก EMG"
+		>
+			{telemetry.emgRep.state === 'CONTRACT' ? 'กำลังเกร็ง' : 'พัก'} · {telemetry.emgRep.count} rep
+		</span>
+	</div>
 
-		<!-- Control Buttons -->
-		<div class="flex items-center gap-1.5 font-mono text-xs">
-			<!-- Gain Selector -->
-			<div class="flex items-center rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-[11px]">
-				<button
-					type="button"
-					onclick={() => (gain = 0.5)}
-					class="px-2 py-1 rounded transition {gain === 0.5 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="ซูมออก (มองภาพรวมทั้งชุด)"
-				>
-					0.5x
-				</button>
-				<button
-					type="button"
-					onclick={() => (gain = 1)}
-					class="px-2 py-1 rounded transition {gain === 1 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="ขนาดปกติ"
-				>
-					1x
-				</button>
-				<button
-					type="button"
-					onclick={() => (gain = 2)}
-					class="px-2 py-1 rounded transition {gain === 2 ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-400 hover:text-zinc-200'}"
-					title="ซูมเข้า (มองรายละเอียด)"
-				>
-					2x
-				</button>
+	<div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+		<span class="text-muted-foreground">
+			สูงสุด <strong class="tabular-nums text-foreground">{Math.round(peakPercent)}%</strong>
+			· เฉลี่ย <strong class="tabular-nums text-foreground">{Math.round(meanPercent)}%</strong>
+			<span class="text-xs">ของแรงสูงสุด</span>
+		</span>
+		<div class="flex items-center gap-1.5">
+			<div class="flex rounded-md border border-border bg-muted/60 p-0.5" role="group" aria-label="ซูมกราฟ">
+				{#each ZOOMS as z (z.value)}
+					<button
+						type="button"
+						onclick={() => (gain = z.value)}
+						title={z.title}
+						class={[
+							'rounded px-2 py-0.5 text-xs transition',
+							gain === z.value
+								? 'bg-background font-semibold text-foreground shadow-sm'
+								: 'text-muted-foreground hover:text-foreground'
+						]}
+					>
+						{z.label}
+					</button>
+				{/each}
 			</div>
-
-			<!-- Pause / Run -->
 			<button
 				type="button"
 				onclick={() => (isPaused = !isPaused)}
-				class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-800 bg-zinc-950 hover:bg-zinc-850 text-zinc-300 transition"
+				class="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-muted"
 			>
 				{#if isPaused}
-					<Play size={12} weight="fill" class="text-emerald-400" />
-					<span>Run</span>
+					<Play size={12} weight="fill" /> เล่นต่อ
 				{:else}
-					<Pause size={12} weight="fill" class="text-amber-400" />
-					<span>Freeze</span>
+					<Pause size={12} weight="fill" /> หยุดภาพ
 				{/if}
 			</button>
-
-			<!-- Reset Peak -->
 			<button
 				type="button"
 				onclick={resetPeak}
-				class="p-1.5 rounded-lg border border-zinc-800 bg-zinc-950 hover:bg-zinc-850 text-zinc-400 hover:text-zinc-200 transition"
-				title="Reset Peak"
+				class="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+				title="รีเซ็ตค่าสูงสุด"
 			>
 				<ArrowClockwise size={13} />
 			</button>
-
-			<!-- API Docs Drawer Toggle -->
-			<button
-				type="button"
-				onclick={() => (showApiHelper = !showApiHelper)}
-				class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 text-zinc-300 transition text-[11px]"
-			>
-				<Cpu size={13} class="text-cyan-400" />
-				<span>API</span>
-			</button>
 		</div>
 	</div>
 
-	<!-- Instant Metric Badges (High Contrast, Minimal Text) -->
-	<div class="grid grid-cols-2 gap-2 font-mono">
-		<!-- Current effort, as % of this user's calibrated max (was raw µV RMS) -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงตอนนี้</div>
-			<div class="text-xl font-bold text-cyan-400">
-				{formatDec(telemetry.emg.mvcPercent)}<span class="text-xs font-normal text-zinc-400">%</span>
-			</div>
-			<div class="w-full h-1 rounded-full bg-zinc-800 mt-1 overflow-hidden">
-				<div class="h-full bg-cyan-400 transition-all duration-100" style="width: {telemetry.emg.mvcPercent}%"></div>
-			</div>
-			<div class="text-[10px] {telemetry.emg.isHighTension ? 'text-emerald-400' : 'text-zinc-400'} mt-1">
-				{telemetry.emg.isHighTension ? 'ออกแรงหนัก' : 'อยู่ในระดับผ่อนคลาย'}
-			</div>
-		</div>
-
-		<!-- Peak Amplitude, expressed the same way as "current effort" for consistency -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงสูงสุด</div>
-			<div class="text-xl font-bold text-zinc-100">
-				{formatDec(peakPercent)} <span class="text-xs font-normal text-zinc-400 font-sans">%</span>
-			</div>
-			<div class="text-[10px] text-zinc-400">สูงสุดในเซสชันนี้</div>
-		</div>
-
-		<!-- Mean RMS -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">ออกแรงเฉลี่ย</div>
-			<div class="text-xl font-bold text-zinc-100">
-				{formatDec(meanPercent)} <span class="text-xs font-normal text-zinc-400 font-sans">%</span>
-			</div>
-			<div class="text-[10px] text-zinc-400">เฉลี่ยช่วงล่าสุด</div>
-		</div>
-
-		<!-- Signal Quality / Rate -->
-		<div class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80">
-			<div class="text-[10px] text-zinc-400 uppercase">ความเร็วสัญญาณ</div>
-			<div class="text-xl font-bold text-emerald-400">
-				{telemetry.streamHz} <span class="text-xs font-normal text-zinc-400 font-sans">ครั้ง/วิ</span>
-			</div>
-			<div class="text-[10px] text-zinc-400">ความเสถียรของการเชื่อมต่อ</div>
-		</div>
+	<div class="relative w-full overflow-hidden rounded-lg border border-border bg-background">
+		<canvas bind:this={canvasElement} height="240" class="block w-full"></canvas>
 	</div>
-
-	<!-- Oscilloscope Canvas Container -->
-	<div class="relative w-full rounded-lg border border-zinc-800/90 overflow-hidden bg-[#09090b]">
-		<canvas bind:this={canvasElement} height="240" class="w-full block"></canvas>
-	</div>
-
-	<!-- Collapsible API Usage Instructions -->
-	{#if showApiHelper}
-		<div class="p-3 rounded-lg bg-zinc-950 border border-zinc-800 space-y-2 text-xs font-mono">
-			<div class="flex items-center justify-between text-zinc-300 font-bold">
-				<span>API ENDPOINT FOR SENDING SENSOR DATA</span>
-				<button
-					type="button"
-					onclick={copyCurlCode}
-					class="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition"
-				>
-					{#if copiedCurl}
-						<Check size={12} class="text-emerald-400" />
-						<span class="text-emerald-400">Copied!</span>
-					{:else}
-						<Copy size={12} />
-						<span>Copy curl</span>
-					{/if}
-				</button>
-			</div>
-
-			<div class="p-2.5 rounded bg-zinc-900/90 border border-zinc-800/80 text-[11px] text-emerald-400 overflow-x-auto select-all">
-				POST /api/emg
-				<br />
-				Content-Type: application/json
-				<br />
-				{JSON.stringify({ raw: 2200, rms: 285.5, mvcPercent: 52, board: 'esp32' }, null, 2)}
-			</div>
-
-			<div class="text-[11px] text-zinc-400">
-				<strong>raw</strong> is the sensor's native ADC count (0-4095); the server converts it to µV. <strong>rms</strong>/<strong>mvcPercent</strong>, if provided, are used as-is (already µV / %MVC).
-				<br />
-				<strong>All-in-one Multi-Sensor:</strong> <code>POST /api/telemetry</code> (accepts EMG, FSR grip, MPU6050, MAX30102).
-				<br />
-				<strong>Live SSE Stream:</strong> <code>GET /api/telemetry/stream</code> (subscribes to 50Hz continuous push).
-			</div>
-		</div>
-	{/if}
 </div>

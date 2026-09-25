@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { workout } from '$lib/workout/workout.svelte';
+	import { workout, type RepSource } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { calibration } from '$lib/workout/calibration.svelte';
 	import { cameraRepCounter } from '$lib/workout/cameraRepCounter.svelte';
@@ -9,13 +9,15 @@
 	import CameraMotionPanel from './CameraMotionPanel.svelte';
 	import RecordingControls from './RecordingControls.svelte';
 	import { formatDec } from '$lib/utils/format';
-	import { Camera, ArrowClockwise, WarningCircle, Play, Stop, X } from 'phosphor-svelte';
+	import { Camera, ArrowsLeftRight, WarningCircle, Play, Stop, X, CaretRight } from 'phosphor-svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onFinishSet: () => void;
+		onGoCalibrate: () => void;
 	}
 
-	let { onFinishSet }: Props = $props();
+	let { onFinishSet, onGoCalibrate }: Props = $props();
 
 	let canvasElement: HTMLCanvasElement | null = $state(null);
 	let videoElement: HTMLVideoElement | null = $state(null);
@@ -33,6 +35,50 @@
 	let poseInstance: any = null;
 	let cameraInstance: any = null;
 
+	const repSources: { id: RepSource; label: string; hint: string; needsEmg: boolean }[] = [
+		{ id: 'camera', label: 'กล้อง', hint: 'นับจากมุมข้อศอก (MediaPipe)', needsEmg: false },
+		{ id: 'emg', label: 'EMG', hint: 'นับจากคลื่นกล้ามเนื้อ ไม่ต้องใช้กล้อง', needsEmg: true },
+		{
+			id: 'hybrid',
+			label: 'Hybrid',
+			hint: 'กล้องนับ + EMG ยืนยันว่ากล้ามเนื้อออกแรงจริง',
+			needsEmg: true
+		}
+	];
+	let usesCamera = $derived(workout.repSource !== 'emg');
+	let usesEmg = $derived(workout.repSource !== 'camera');
+	let emgLive = $derived(telemetry.sensorStatus.emg === 'live');
+	// In EMG mode an idle camera is optional: shrink it to one row under the (then
+	// full-width) EMG graph instead of an empty half-screen preview. The canvas stays
+	// mounted (just hidden) so turning the camera on still has something to draw into.
+	let cameraCompact = $derived(!usesCamera && !isWebcamActive);
+
+	let setTime = $derived(
+		`${String(Math.floor(workout.setDurationSeconds / 60)).padStart(2, '0')}:${String(
+			workout.setDurationSeconds % 60
+		).padStart(2, '0')}`
+	);
+
+	// Plain-language rep phase for the stats bar (the raw FSM names mean nothing to a lifter).
+	let phase = $derived.by((): { label: string; tone: string } => {
+		if (!workout.isSetRunning) return { label: 'ยังไม่เริ่มเซต', tone: 'text-muted-foreground' };
+		if (workout.repSource === 'emg') {
+			return telemetry.emgRep.state === 'CONTRACT'
+				? { label: 'กำลังเกร็ง', tone: 'text-emerald-600' }
+				: { label: 'พัก / ลงน้ำหนัก', tone: 'text-foreground' };
+		}
+		switch (workout.fsmState) {
+			case 'PEAK':
+				return { label: 'จุดสูงสุด', tone: 'text-emerald-600' };
+			case 'INFLECTION':
+				return { label: 'กำลังยก', tone: 'text-amber-600' };
+			case 'COMPLETION':
+				return { label: 'นับแล้ว', tone: 'text-emerald-600' };
+			default:
+				return { label: 'แขนเหยียด', tone: 'text-foreground' };
+		}
+	});
+
 	const exercises = ['Biceps Curl', 'Hammer Curl', 'Preacher Curl', 'Dumbbell Row'];
 	const weightOptions = [7.5, 10.0, 12.5, 15.0, 17.5, 20.0];
 
@@ -41,6 +87,14 @@
 			workout.stopSet();
 			onFinishSet();
 		} else {
+			// Camera/hybrid count from the MediaPipe elbow angle, emg/hybrid need the sEMG
+			// stream -- warn up front instead of silently recording 0 reps.
+			if (usesCamera && !isWebcamActive) {
+				toast.warning('ยังไม่ได้เปิดกล้อง ระบบจะยังไม่นับครั้ง (rep) จนกว่าจะเปิดกล้อง');
+			}
+			if (usesEmg && !emgLive) {
+				toast.warning('ไม่พบสัญญาณจากเซนเซอร์ EMG ตรวจสอบการเชื่อมต่อบอร์ด');
+			}
 			workout.startSet();
 		}
 	}
@@ -355,150 +409,233 @@
 <video bind:this={videoElement} playsinline muted class="hidden"></video>
 
 <div class="mx-auto flex max-w-7xl flex-col gap-5 p-4 md:p-6">
-	<!-- Control Bar -->
-	<div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-md">
-		<div class="flex items-center gap-4">
-			<div class="flex flex-col gap-1">
-				<label for="ex-select" class="text-xs text-muted-foreground">ท่าออกกำลังกาย</label>
+	<!-- Set setup + start/stop -->
+	<div class="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-border bg-card p-5 shadow-sm">
+		<div class="flex flex-wrap items-end gap-4">
+			<label class="flex flex-col gap-1.5 text-sm text-muted-foreground">
+				ท่าออกกำลังกาย
 				<select
-					id="ex-select"
 					bind:value={workout.exercise}
-					class="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-semibold text-foreground focus:border-cyan-500 focus:outline-none"
+					disabled={workout.isSetRunning}
+					class="rounded-lg border border-border bg-background px-3 py-2 text-base font-semibold text-foreground focus:border-cyan-500 focus:outline-none"
 				>
-					{#each exercises as ex}
+					{#each exercises as ex (ex)}
 						<option value={ex}>{ex}</option>
 					{/each}
 				</select>
-			</div>
+			</label>
 
-			<div class="flex flex-col gap-1">
-				<label for="wt-select" class="text-xs text-muted-foreground">น้ำหนักดัมเบล</label>
+			<label class="flex flex-col gap-1.5 text-sm text-muted-foreground">
+				น้ำหนัก
 				<select
-					id="wt-select"
 					bind:value={workout.weightKg}
-					class="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-semibold text-foreground focus:border-cyan-500 focus:outline-none"
+					disabled={workout.isSetRunning}
+					class="rounded-lg border border-border bg-background px-3 py-2 text-base font-semibold text-foreground focus:border-cyan-500 focus:outline-none"
 				>
-					{#each weightOptions as wt}
+					{#each weightOptions as wt (wt)}
 						<option value={wt}>{wt} kg</option>
 					{/each}
 				</select>
+			</label>
+
+			<div class="flex flex-col gap-1.5">
+				<span id="rep-source-label" class="text-sm text-muted-foreground">นับ rep จาก</span>
+				<div
+					role="radiogroup"
+					aria-labelledby="rep-source-label"
+					class="flex rounded-lg border border-border bg-muted/60 p-1"
+				>
+					{#each repSources as src (src.id)}
+						{@const locked = workout.isSetRunning || (src.needsEmg && !calibration.canCountWithEmg)}
+						<button
+							type="button"
+							role="radio"
+							aria-checked={workout.repSource === src.id}
+							disabled={locked && workout.repSource !== src.id}
+							title={src.needsEmg && !calibration.canCountWithEmg
+								? 'ต้องวัดจุดออกแรงสูงสุด (MVC) ในหน้า Calibration ก่อน'
+								: src.hint}
+							onclick={() => workout.setRepSource(src.id)}
+							class={[
+								'rounded-md px-4 py-1.5 text-base font-semibold transition disabled:cursor-not-allowed disabled:opacity-40',
+								workout.repSource === src.id
+									? 'bg-background text-foreground shadow-sm'
+									: 'text-muted-foreground hover:text-foreground'
+							]}
+						>
+							{src.label}
+						</button>
+					{/each}
+				</div>
 			</div>
 		</div>
 
-		<div class="flex items-center gap-6">
-			<div>
-				<span class="text-xs text-muted-foreground">เซตปัจจุบัน</span>
-				<div class="text-xl font-black text-foreground">
-					#{workout.currentSet} <span class="text-xs font-normal text-muted-foreground">/ {workout.totalSets}</span>
-				</div>
-			</div>
-
-			<div>
-				<span class="text-xs text-muted-foreground">เวลาเซต (TUT)</span>
-				<div class="text-xl font-black text-cyan-400">
-					{String(Math.floor(workout.setDurationSeconds / 60)).padStart(2, '0')}:{String(
-						workout.setDurationSeconds % 60
-					).padStart(2, '0')}
-				</div>
-			</div>
-		</div>
-
-		<div class="flex items-center gap-3">
-			<button
-				onclick={handleStartStop}
-				class="flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-black transition-all {workout.isSetRunning
+		<button
+			onclick={handleStartStop}
+			class={[
+				'flex items-center gap-2 rounded-xl px-7 py-3 text-lg font-bold transition-all',
+				workout.isSetRunning
 					? 'bg-destructive text-white shadow-lg shadow-destructive/30'
-					: 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400'}"
+					: 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400'
+			]}
+		>
+			{#if workout.isSetRunning}
+				<Stop size={18} weight="fill" />
+				<span>จบเซต</span>
+			{:else}
+				<Play size={18} weight="fill" />
+				<span>เริ่มเซต</span>
+			{/if}
+		</button>
+	</div>
+
+	<!-- The numbers a lifter glances at mid-set -->
+	<div class="grid grid-cols-2 gap-3 md:grid-cols-5">
+		<div class="rounded-xl border border-border bg-card p-4 shadow-sm md:col-span-2">
+			<div class="text-sm text-muted-foreground">เซต #{workout.currentSet} · จำนวนครั้ง</div>
+			<div class="text-6xl font-bold tabular-nums text-foreground">{workout.totalReps}</div>
+			<div class="mt-1 flex gap-4 text-sm">
+				<span class="text-emerald-600">ท่าคลีน <strong class="tabular-nums">{workout.cleanReps}</strong></span>
+				<span class="text-rose-600">โกงท่า <strong class="tabular-nums">{workout.cheatedReps}</strong></span>
+			</div>
+		</div>
+		<div class="rounded-xl border border-border bg-card p-4 shadow-sm">
+			<div class="text-sm text-muted-foreground">เวลาเซต</div>
+			<div class="text-4xl font-bold tabular-nums text-foreground">{setTime}</div>
+		</div>
+		<div class="rounded-xl border border-border bg-card p-4 shadow-sm">
+			<div class="text-sm text-muted-foreground">แรงกล้ามเนื้อตอนนี้</div>
+			<div
+				class={[
+					'text-4xl font-bold tabular-nums',
+					telemetry.emg.isHighTension ? 'text-emerald-600' : 'text-foreground'
+				]}
 			>
-				{#if workout.isSetRunning}
-					<Stop size={15} weight="fill" class="fill-white" />
-					<span>จบเซต & ดูสรุปผล</span>
-				{:else}
-					<Play size={15} weight="fill" class="fill-black" />
-					<span>เริ่มเซต (START SET)</span>
-				{/if}
-			</button>
+				{emgLive ? `${Math.round(telemetry.emg.mvcPercent)}%` : '–'}
+			</div>
+			<div class="text-xs text-muted-foreground">ของแรงสูงสุด (MVC)</div>
+		</div>
+		<div class="rounded-xl border border-border bg-card p-4 shadow-sm">
+			<div class="text-sm text-muted-foreground">สถานะ</div>
+			<div class={['text-2xl font-bold', phase.tone]}>{phase.label}</div>
+			<div class="text-xs text-muted-foreground">ท่าคลีน {workout.formPurityPercent}%</div>
 		</div>
 	</div>
 
-	<!-- Main Grid: CV Pose + 50Hz Stream -->
+	{#if !calibration.isCalibrated && !workout.isSetRunning}
+		<div
+			class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-800"
+		>
+			<span class="flex items-center gap-2">
+				<WarningCircle size={18} weight="fill" />
+				ยังไม่ได้ปรับเทียบเซนเซอร์ % แรงกล้ามเนื้อจะคำนวณจากค่ามาตรฐาน ไม่ใช่ของคุณ
+			</span>
+			<button onclick={onGoCalibrate} class="rounded-md border border-amber-600/50 px-3 py-1 font-semibold hover:bg-amber-500/20">
+				ไปปรับเทียบ
+			</button>
+		</div>
+	{/if}
+
+	{#if workout.isSetRunning && usesEmg && !emgLive}
+		<div class="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-800">
+			<WarningCircle size={18} weight="fill" />
+			<span>ไม่ได้รับสัญญาณจากเซนเซอร์ EMG ระบบนับ rep ด้วย EMG ไม่ได้จนกว่าสัญญาณจะกลับมา</span>
+		</div>
+	{/if}
+
+	{#if workout.isSetRunning && usesCamera && !isWebcamActive}
+		<div class="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-800">
+			<WarningCircle size={18} weight="fill" />
+			<span>เซตกำลังทำงานแต่กล้องปิดอยู่ ระบบจะไม่นับครั้ง (rep) จนกว่าจะเปิดกล้อง</span>
+		</div>
+	{/if}
+
 	<div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-		<!-- Left: Camera HUD -->
-		<div class="flex flex-col rounded-xl border border-border bg-card p-4 shadow-md">
-			<div class="flex flex-wrap items-center justify-between gap-2 pb-3">
+		<!-- Camera -->
+		<div
+			class={[
+				'flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm',
+				cameraCompact && 'order-2 lg:col-span-2'
+			]}
+		>
+			<div class="flex flex-wrap items-start justify-between gap-2">
 				<div>
-					<span class="text-[10px] font-bold tracking-wider text-cyan-400 uppercase">
-						MediaPipe Pose (33 Landmarks)
-					</span>
-					<h3 class="text-base font-bold text-foreground">Real-Time Joint Angle & Anti-Cheat HUD</h3>
+					<h3 class="flex items-center gap-2 text-base font-semibold text-foreground">
+						<Camera size={18} class="text-cyan-600" />
+						กล้องตรวจท่าทาง
+					</h3>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						{usesCamera ? 'นับ rep จากมุมข้อศอก และจับการเหวี่ยงตัว/ยกไหล่' : 'ไม่บังคับ ใช้จับท่าโกงและวัดมุมข้อศอก'}
+					</p>
 				</div>
 
 				<div class="flex items-center gap-2">
-					<button
-						onclick={toggleWebcam}
-						disabled={modelStatus === 'loading'}
-						class="flex items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-bold transition-all {isWebcamActive
-							? 'border-emerald-500 bg-emerald-500/20 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
-							: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'}"
-					>
-						<Camera size={14} />
-						{#if modelStatus === 'loading'}
-							<span>โหลด Model...</span>
-						{:else if isWebcamActive}
-							<span>กล้องจริง (ON)</span>
-						{:else}
-							<span>เปิดกล้องจริง</span>
-						{/if}
-					</button>
-
 					{#if isWebcamActive}
 						<select
 							bind:value={trackedArm}
 							onchange={() => telemetry.setTrackedArm(trackedArm)}
-							class="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+							class="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+							aria-label="แขนที่ติดตาม"
 						>
 							<option value="right">แขนขวา</option>
 							<option value="left">แขนซ้าย</option>
 						</select>
-
 						<button
 							onclick={() => (mirrorVideo = !mirrorVideo)}
-							class="rounded border border-border bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+							class="rounded-md border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+							title="กลับด้านภาพ"
 						>
-							<ArrowClockwise size={13} />
+							<ArrowsLeftRight size={14} />
 						</button>
 					{/if}
+					<button
+						onclick={toggleWebcam}
+						disabled={modelStatus === 'loading'}
+						class={[
+							'rounded-md border px-3 py-1.5 text-sm font-semibold transition',
+							isWebcamActive
+								? 'border-border text-foreground hover:bg-muted'
+								: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-700 hover:bg-cyan-500/20'
+						]}
+					>
+						{modelStatus === 'loading' ? 'กำลังโหลด...' : isWebcamActive ? 'ปิดกล้อง' : 'เปิดกล้อง'}
+					</button>
 				</div>
 			</div>
 
 			{#if modelStatus === 'error'}
-				<div class="mb-3 flex items-center justify-between rounded-md bg-destructive/15 p-2 text-xs text-destructive">
+				<div class="flex items-center justify-between rounded-md bg-destructive/15 p-2.5 text-sm text-destructive">
 					<span class="flex items-center gap-1.5">
-						<WarningCircle size={14} />
+						<WarningCircle size={16} />
 						{modelErrorMsg}
 					</span>
-					<button onclick={() => (modelStatus = 'idle')}>
-						<X size={14} />
+					<button onclick={() => (modelStatus = 'idle')} aria-label="ปิด">
+						<X size={16} />
 					</button>
 				</div>
 			{/if}
 
 			<!-- Canvas Frame -->
-			<div class="relative aspect-[4/3] w-full overflow-hidden rounded-lg border border-border bg-[#070a12]">
+			<div
+				class={[
+					'relative aspect-[4/3] w-full overflow-hidden rounded-lg border border-border bg-[#070a12]',
+					cameraCompact && 'hidden'
+				]}
+			>
 				<canvas bind:this={canvasElement} width="640" height="480" class="h-full w-full object-cover"></canvas>
 
 				<!-- ROM Angle HUD -->
 				<div
 					class="absolute top-3 left-3 rounded-lg border border-border bg-card/85 p-2.5 backdrop-blur-sm"
 				>
-					<span class="block text-2xl font-black text-emerald-400">{telemetry.cv.elbowAngle}°</span>
-					<span class="text-[9px] font-bold tracking-wider text-muted-foreground uppercase">ELBOW ROM</span>
+					<span class="block text-2xl font-black text-emerald-600">{telemetry.cv.elbowAngle}°</span>
+					<span class="text-xs text-muted-foreground">มุมข้อศอก</span>
 				</div>
 
 				<!-- Floating Alerts -->
 				{#if workout.activeCheatWarnings.length > 0}
 					<div class="absolute top-3 right-3 flex flex-col gap-1.5">
-						{#each workout.activeCheatWarnings as warning}
+						{#each workout.activeCheatWarnings as warning (warning)}
 							<div
 								class="animate-bounce rounded-md bg-destructive/90 px-2.5 py-1 text-xs font-black text-white shadow-lg shadow-destructive/30"
 							>
@@ -510,14 +647,14 @@
 
 				<!-- Status Badge -->
 				<div
-					class="absolute top-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card/80 px-2.5 py-0.5 text-[11px] text-muted-foreground backdrop-blur-sm"
+					class="absolute top-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card/80 px-2.5 py-0.5 text-xs text-muted-foreground backdrop-blur-sm"
 				>
 					<span
 						class="h-1.5 w-1.5 rounded-full {isWebcamActive
 							? 'bg-emerald-500 shadow-[0_0_6px_#10b981]'
-							: 'bg-zinc-500'}"
+							: 'bg-muted-foreground/50'}"
 					></span>
-					<span>{isWebcamActive ? `Live Camera (${fps} FPS)` : 'Camera Standby'}</span>
+					<span>{isWebcamActive ? `กล้องทำงาน · ${fps} FPS` : 'กล้องปิดอยู่'}</span>
 				</div>
 
 				<!-- Center Start Camera CTA when camera is idle -->
@@ -530,9 +667,11 @@
 						>
 							<Camera size={28} class="text-black" />
 						</div>
-						<h4 class="mt-3 text-base font-black text-white">ทดสอบ Real-Time Joint Angle & Anti-Cheat</h4>
-						<p class="mt-1 max-w-xs text-xs text-muted-foreground">
-							เชื่อมต่อกล้องจริงเพื่อคำนวณมุมข้อศอกสด และดักจับการเหวี่ยงตัว/ยกไหล่ด้วย MediaPipe Pose (30 FPS)
+						<h4 class="mt-3 text-lg font-bold text-white">
+							{usesCamera ? 'เปิดกล้องเพื่อนับ rep และตรวจท่า' : 'เปิดกล้องเพื่อตรวจท่าโกง (ไม่บังคับ)'}
+						</h4>
+						<p class="mt-1 max-w-xs text-sm text-white/70">
+							ตั้งกล้องให้เห็นลำตัวและแขนข้างที่ยก ระบบจะวัดมุมข้อศอกและจับการเหวี่ยงตัว/ยกไหล่
 						</p>
 						<button
 							onclick={startWebcam}
@@ -540,20 +679,20 @@
 							class="mt-4 flex items-center gap-2 rounded-xl bg-linear-to-r from-emerald-500 to-cyan-500 px-6 py-3 font-black text-black shadow-xl shadow-emerald-500/25 transition-all hover:scale-105 hover:shadow-emerald-500/40 disabled:opacity-50"
 						>
 							<Camera size={20} weight="fill" class="fill-black" />
-							<span>{modelStatus === 'loading' ? 'กำลังดาวน์โหลด Model...' : 'เปิดกล้องจริงทันที (Start Real Camera)'}</span>
+							<span>{modelStatus === 'loading' ? 'กำลังโหลดโมเดล...' : 'เปิดกล้อง'}</span>
 						</button>
 					</div>
 				{/if}
 
 				<!-- Footer Metrics -->
-				<div class="absolute right-3 bottom-3 left-3 flex justify-between gap-2 text-xs font-mono">
+				<div class="absolute right-3 bottom-3 left-3 flex justify-between gap-2 text-sm">
 					<span
 						class="rounded border bg-card/80 px-2 py-1 backdrop-blur-sm {telemetry.cv.torsoAngle >
 						calibration.torsoAngleLimitDeg
 							? 'border-destructive text-destructive'
 							: 'border-border text-muted-foreground'}"
 					>
-						Torso: {formatDec(telemetry.cv.torsoAngle)}° (Max {formatDec(calibration.torsoAngleLimitDeg)}°)
+						เอนตัว {formatDec(telemetry.cv.torsoAngle, 1)}° / {formatDec(calibration.torsoAngleLimitDeg)}°
 					</span>
 					<span
 						class="rounded border bg-card/80 px-2 py-1 backdrop-blur-sm {telemetry.cv.shoulderHikeCm >
@@ -561,71 +700,47 @@
 							? 'border-destructive text-destructive'
 							: 'border-border text-muted-foreground'}"
 					>
-						Hike: {formatDec(telemetry.cv.shoulderHikeCm)} cm (Max {formatDec(calibration.shoulderHikeLimitCm)}cm)
+						ยกไหล่ {formatDec(telemetry.cv.shoulderHikeCm, 1)} / {formatDec(calibration.shoulderHikeLimitCm)} ซม.
 					</span>
 				</div>
 			</div>
 		</div>
 
-		<!-- Right: Biofeedback Columns -->
-		<div class="flex flex-col">
-			<!-- sEMG High-Clarity Monitor & Real-Time Oscilloscope -->
+		<div class={cameraCompact ? 'order-1 lg:col-span-2' : ''}>
 			<EmgGraphMonitor />
-
-			<!-- OpenCV.js motion-based rep counter -- cross-check vs. MediaPipe -->
-			<div class="mt-5">
-				<CameraMotionPanel />
-			</div>
-
-			<!-- VBT Velocity & FSR Vitals Sensors -->
 		</div>
 	</div>
+
 	<BiofeedbackSensors />
 
-	<RecordingControls />
-
-	<!-- Rep Counter Banner -->
-	<div class="grid grid-cols-2 gap-4 rounded-xl border border-cyan-500/30 bg-card p-4 text-center md:grid-cols-5">
-		<div>
-			<span class="text-xs font-bold text-muted-foreground uppercase">TOTAL REPS</span>
-			<div class="text-4xl font-black text-foreground">{workout.totalReps}</div>
-			<span class="text-[10px] text-muted-foreground">ครั้งทั้งหมด</span>
+	<!-- Diagnostics lifters don't need mid-set, kept one click away for testing/reporting -->
+	<details class="group rounded-xl border border-border bg-card shadow-sm">
+		<summary class="flex cursor-pointer list-none items-center gap-2 px-5 py-4 text-sm font-semibold text-foreground">
+			<CaretRight size={14} class="transition-transform group-open:rotate-90" />
+			ข้อมูลละเอียดสำหรับนักพัฒนา / การทดสอบ
+			<span class="font-normal text-muted-foreground">ค่าดิบ MPU · ตัวนับ OpenCV · export ข้อมูล</span>
+		</summary>
+		<div class="flex flex-col gap-4 border-t border-border p-5">
+			<div>
+				<h4 class="mb-2 text-sm font-semibold text-foreground">ค่าดิบ MPU-6050</h4>
+				<dl class="grid grid-cols-3 gap-2 text-center sm:grid-cols-6">
+					{#each [
+						{ k: 'Pitch', v: `${formatDec(telemetry.mpu.pitch, 1)}°` },
+						{ k: 'Roll', v: `${formatDec(telemetry.mpu.roll, 1)}°` },
+						{ k: 'Ax', v: formatDec(telemetry.mpu.ax, 2) },
+						{ k: 'Ay', v: formatDec(telemetry.mpu.ay, 2) },
+						{ k: 'Az', v: formatDec(telemetry.mpu.az, 2) },
+						{ k: 'V₁ (ครั้งแรก)', v: `${formatDec(telemetry.mpu.rep1Velocity, 2)} m/s` }
+					] as item (item.k)}
+						<div class="rounded-lg bg-muted/60 p-2">
+							<dt class="text-xs text-muted-foreground">{item.k}</dt>
+							<dd class="font-semibold tabular-nums text-foreground">{item.v}</dd>
+						</div>
+					{/each}
+				</dl>
+			</div>
+			<CameraMotionPanel />
+			<RecordingControls />
 		</div>
-
-		<div>
-			<span class="text-xs font-bold text-emerald-400 uppercase">CLEAN REPS</span>
-			<div class="text-4xl font-black text-emerald-400">{workout.cleanReps}</div>
-			<span class="text-[10px] text-muted-foreground">แรงตึงเข้า 100%</span>
-		</div>
-
-		<div>
-			<span class="text-xs font-bold text-destructive uppercase">CHEATED REPS</span>
-			<div class="text-4xl font-black text-destructive">{workout.cheatedReps}</div>
-			<span class="text-[10px] text-muted-foreground">พบการโกงท่า</span>
-		</div>
-
-		<div>
-			<span class="text-xs font-bold text-cyan-400 uppercase">FORM PURITY</span>
-			<div class="text-4xl font-black text-cyan-400">{formatDec(workout.formPurityPercent)}%</div>
-			<span class="text-[10px] text-muted-foreground">ความสมบูรณ์ฟอร์ม</span>
-		</div>
-
-		<div class="flex flex-col items-center justify-center">
-			<span class="text-xs font-bold text-muted-foreground uppercase">FSM STATE</span>
-			<span
-				class="mt-1 rounded-full border px-4 py-1 text-sm font-black tracking-wider uppercase {workout.fsmState ===
-				'PEAK'
-					? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
-					: workout.fsmState === 'INFLECTION'
-						? 'border-amber-500/60 bg-amber-500/20 text-amber-400'
-						: workout.fsmState === 'START'
-							? 'border-cyan-500/60 bg-cyan-500/20 text-cyan-400'
-							: 'border-border bg-muted/40 text-muted-foreground'}"
-			>
-				{workout.fsmState}
-			</span>
-			<span class="mt-0.5 text-[10px] text-muted-foreground">Rep State Machine</span>
-		</div>
-	</div>
+	</details>
 </div>
-
