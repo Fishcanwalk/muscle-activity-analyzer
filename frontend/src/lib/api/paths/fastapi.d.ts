@@ -191,6 +191,21 @@ export interface components {
             fsrZero: number;
             /** Fsrmax */
             fsrMax: number;
+            /**
+             * Emgreponpct
+             * @default 35
+             */
+            emgRepOnPct: number;
+            /**
+             * Emgrepoffpct
+             * @default 20
+             */
+            emgRepOffPct: number;
+            /**
+             * Emgreppeakpct
+             * @default 45
+             */
+            emgRepPeakPct: number;
             /** User Id */
             user_id: string;
             /**
@@ -209,6 +224,21 @@ export interface components {
             fsrZero: number;
             /** Fsrmax */
             fsrMax: number;
+            /**
+             * Emgreponpct
+             * @default 35
+             */
+            emgRepOnPct: number;
+            /**
+             * Emgrepoffpct
+             * @default 20
+             */
+            emgRepOffPct: number;
+            /**
+             * Emgreppeakpct
+             * @default 45
+             */
+            emgRepPeakPct: number;
         };
         /** DeviceState */
         DeviceState: {
@@ -322,6 +352,8 @@ export interface components {
             timestamp?: string | null;
             /** Session Id */
             session_id?: string | null;
+            /** Repsource */
+            repSource?: string | null;
             /** Id */
             id: string;
             /** User Id */
@@ -360,6 +392,8 @@ export interface components {
             timestamp?: string | null;
             /** Session Id */
             session_id?: string | null;
+            /** Repsource */
+            repSource?: string | null;
         };
         /** TelemetryIngest */
         TelemetryIngest: {

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { env } from '$env/dynamic/private';
 import { logger } from '$lib/logger';
 import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
+import { EmgRepDetector, type EmgRepEvent, type EmgRepState } from './emgRepDetector';
 
 export interface EmgPacket {
 	raw?: number | number[];
@@ -58,12 +59,20 @@ function round3(n: number | undefined | null): number {
 const ADC_MAX = 4095;
 const ADC_VREF_MV = 3300;
 
-// Assumed sEMG front-end amplifier gain (typical MyoWare/AD8232-class module, ~1000x).
-// The signal is AC-coupled and biased at mid-scale (ADC_MAX / 2) at rest, so we
-// recenter before converting the deviation back to the original µV-scale biopotential.
-// Tune EMG_GAIN to your actual sensor's datasheet gain for accurate readings.
+// The sEMG module is wired from its SIG (envelope) output, not RAW: the module has
+// already rectified and smoothed the biopotential, so the signal sits near 0 at rest
+// and rises with contraction (see output-emg.md -- it never goes below the resting
+// baseline). EMG_GAIN is the assumed front-end gain used to express it on a µV-like
+// scale; everything user-facing (and rep counting) uses % of calibrated MVC instead,
+// so the exact gain doesn't matter as long as calibration uses the same scale.
 const EMG_GAIN = 1000;
-const HIGH_TENSION_UV_THRESHOLD = 280;
+
+// The ESP32 samples the Uno's latest EMG value at a fixed 100 Hz (SAMPLE_INTERVAL_MS
+// in esp32_workout_firmware.ino) and batches ~25 of them per POST, so each array
+// element is 10 ms apart regardless of network timing.
+const EMG_SAMPLE_MS = 10;
+// Moving-average window smoothing the SIG output into the envelope rep counting uses.
+const EMG_ENVELOPE_WINDOW = 10; // samples = 100 ms
 
 // Assumed full-scale grip force (Newtons) at max ADC reading; calibrate via fsrMax.
 const FSR_MAX_N = 50;
@@ -84,11 +93,10 @@ export type StartRecordingResult = { ok: true } | { ok: false; reason: 'conflict
 // refresh, and would wrongly kill recording on every reload).
 const MAX_RECORDING_DURATION_MS = 10 * 60 * 1000;
 
-// `baseline` is the calibrated rest-state µV reading (state.calibration.emgBaseline);
-// it defaults to 0 so an uncalibrated system reproduces the old, unadjusted conversion.
+// `baseline` is the calibrated resting level on the same scale
+// (state.calibration.emgBaseline); 0 when uncalibrated.
 function adcToEmgUv(rawAdc: number, baseline = 0): number {
-	const centered = rawAdc - ADC_MAX / 2;
-	const mv = (centered / ADC_MAX) * ADC_VREF_MV;
+	const mv = (rawAdc / ADC_MAX) * ADC_VREF_MV;
 	return (mv * 1000) / EMG_GAIN - baseline;
 }
 
@@ -103,25 +111,36 @@ function adcToForceN(rawAdc: number, zeroAdc = 0, maxAdc = ADC_MAX): number {
 
 class ServerTelemetryState {
 	private emitter = new EventEmitter();
-	private rawBuffer: number[] = Array(EMG_BUFFER_SIZE).fill(20);
+	private rawBuffer: number[] = Array(EMG_BUFFER_SIZE).fill(0);
 	private packetCount = 0;
 	private lastPacketTime = Date.now();
 	private packetsPerSec = 0;
 	private secondCounter = 0;
 	private lastRateCalc = Date.now();
 	private recording: RecordingSlot | null = null;
+	private envelopeWindow: number[] = [];
+	private emgRepDetector = new EmgRepDetector();
 
 	state = {
 		emg: {
-			raw: 20,
+			raw: 0,
 			rawBuffer: this.rawBuffer,
-			rms: 18.5,
-			peak: 35,
-			mvcPercent: 5,
+			rms: 0,
+			peak: 0,
+			mvcPercent: 0,
 			isHighTension: false,
+			/** Highest envelope %MVC within the latest batch, so peaks between SSE packets aren't lost. */
+			windowPeakPct: 0,
 			timestamp: Date.now()
 		},
+		emgRep: {
+			state: 'REST' as EmgRepState,
+			count: 0
+		},
 		fsr: {
+			// Uncalibrated ADC count, kept so the calibration page can capture
+			// fsrZero/fsrMax (which are raw ADC counts) from live readings.
+			rawAdc: 0,
 			gripForce: 0,
 			gripStability: 95,
 			isStable: true
@@ -154,10 +173,13 @@ class ServerTelemetryState {
 			vitals: { lastSeen: 0 }
 		},
 		calibration: {
-			emgBaseline: 20.0,
+			emgBaseline: 0,
 			emgMvc: 550.0,
 			fsrZero: 0.0,
-			fsrMax: ADC_MAX
+			fsrMax: ADC_MAX,
+			emgRepOnPct: this.emgRepDetector.currentConfig.onPct,
+			emgRepOffPct: this.emgRepDetector.currentConfig.offPct,
+			emgRepPeakPct: this.emgRepDetector.currentConfig.peakPct
 		}
 	};
 
@@ -168,42 +190,7 @@ class ServerTelemetryState {
 	ingestEmg(data: EmgPacket) {
 		const now = Date.now();
 		this.recordPacket(data.board || 'unknown');
-
-		const rawAdc = Array.isArray(data.raw)
-			? (data.raw[data.raw.length - 1] ?? 20)
-			: (data.raw ?? 20);
-		const emgBaseline = this.state.calibration.emgBaseline;
-		const emgUv = adcToEmgUv(rawAdc, emgBaseline);
-
-		if (Array.isArray(data.raw)) {
-			for (const r of data.raw) {
-				this.rawBuffer.shift();
-				this.rawBuffer.push(round3(adcToEmgUv(r, emgBaseline)));
-			}
-		} else {
-			this.rawBuffer.shift();
-			this.rawBuffer.push(round3(emgUv));
-		}
-
-		const rms = data.rms !== undefined ? round3(data.rms) : round3(Math.abs(emgUv) * 1.1);
-		const peak =
-			data.peak !== undefined
-				? round3(data.peak)
-				: Math.max(Math.abs(round3(emgUv)), this.state.emg.peak);
-		const mvcPercent =
-			data.mvcPercent !== undefined
-				? round3(data.mvcPercent)
-				: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
-
-		this.state.emg = {
-			raw: round3(emgUv),
-			rawBuffer: [...this.rawBuffer],
-			rms,
-			peak,
-			mvcPercent,
-			isHighTension: rms > HIGH_TENSION_UV_THRESHOLD,
-			timestamp: data.timestamp || now
-		};
+		this.ingestEmgSamples(data, data.timestamp || now);
 		this.state.sensors.emg.lastSeen = now;
 
 		this.broadcast('emg', this.state.emg);
@@ -211,46 +198,62 @@ class ServerTelemetryState {
 		this.forwardToBackend();
 	}
 
+	// Shared by /api/emg and /api/telemetry: converts each raw sample, smooths it into
+	// the envelope, runs the rep detector on every sample (not just the latest one) and
+	// broadcasts an `emgRep` event per counted rep.
+	private ingestEmgSamples(
+		emg: { raw?: number | number[]; rms?: number; peak?: number; mvcPercent?: number },
+		timestamp: number
+	) {
+		const { emgBaseline, emgMvc } = this.state.calibration;
+		const raws = Array.isArray(emg.raw) ? emg.raw : emg.raw !== undefined ? [emg.raw] : [];
+
+		let lastUv = this.state.emg.raw;
+		let envelopeUv = this.state.emg.rms;
+		let windowPeakPct = 0;
+		for (const raw of raws) {
+			lastUv = adcToEmgUv(raw, emgBaseline);
+			this.rawBuffer.shift();
+			this.rawBuffer.push(round3(lastUv));
+
+			this.envelopeWindow.push(Math.max(0, lastUv));
+			if (this.envelopeWindow.length > EMG_ENVELOPE_WINDOW) this.envelopeWindow.shift();
+			envelopeUv = this.envelopeWindow.reduce((sum, v) => sum + v, 0) / this.envelopeWindow.length;
+
+			const pct = (envelopeUv / (emgMvc || 1)) * 100;
+			if (pct > windowPeakPct) windowPeakPct = pct;
+			const rep = this.emgRepDetector.push(pct, envelopeUv, EMG_SAMPLE_MS);
+			if (rep) this.broadcast('emgRep', rep satisfies EmgRepEvent);
+		}
+
+		const rms = emg.rms !== undefined ? round3(emg.rms) : round3(envelopeUv);
+		const mvcPercent =
+			emg.mvcPercent !== undefined
+				? round3(emg.mvcPercent)
+				: Math.min(100, round3((rms / (emgMvc || 1)) * 100));
+
+		this.state.emg = {
+			raw: round3(lastUv),
+			rawBuffer: [...this.rawBuffer],
+			rms,
+			peak: emg.peak !== undefined ? round3(emg.peak) : Math.max(rms, this.state.emg.peak),
+			mvcPercent,
+			isHighTension: mvcPercent >= this.state.calibration.emgRepPeakPct,
+			windowPeakPct: round3(windowPeakPct),
+			timestamp
+		};
+		this.state.emgRep = {
+			state: this.emgRepDetector.state,
+			count: this.emgRepDetector.count
+		};
+	}
+
 	ingestFullTelemetry(data: FullTelemetryPacket) {
 		const now = Date.now();
 		this.recordPacket(data.board || 'esp32');
 
 		if (data.emg) {
-			const rawAdc = Array.isArray(data.emg.raw)
-				? (data.emg.raw[data.emg.raw.length - 1] ?? 20)
-				: (data.emg.raw ?? 20);
-			const emgBaseline = this.state.calibration.emgBaseline;
-			const emgUv = adcToEmgUv(rawAdc, emgBaseline);
-
-			if (Array.isArray(data.emg.raw)) {
-				for (const r of data.emg.raw) {
-					this.rawBuffer.shift();
-					this.rawBuffer.push(round3(adcToEmgUv(r, emgBaseline)));
-				}
-			} else {
-				this.rawBuffer.shift();
-				this.rawBuffer.push(round3(emgUv));
-			}
-
-			const rms =
-				data.emg.rms !== undefined ? round3(data.emg.rms) : round3(Math.abs(emgUv) * 1.1);
-			const mvcPercent =
-				data.emg.mvcPercent !== undefined
-					? round3(data.emg.mvcPercent)
-					: Math.min(100, round3((rms / this.state.calibration.emgMvc) * 100));
-
-			this.state.emg = {
-				raw: round3(emgUv),
-				rawBuffer: [...this.rawBuffer],
-				rms,
-				peak:
-					data.emg.peak !== undefined
-						? round3(data.emg.peak)
-						: Math.max(Math.abs(round3(emgUv)), this.state.emg.peak),
-				mvcPercent,
-				isHighTension: rms > HIGH_TENSION_UV_THRESHOLD,
-				timestamp: data.timestamp || now
-			};
+			this.ingestEmgSamples(data.emg, data.timestamp || now);
 			this.state.sensors.emg.lastSeen = now;
 		}
 
@@ -266,6 +269,7 @@ class ServerTelemetryState {
 						)
 					: this.state.fsr.gripForce;
 			this.state.fsr = {
+				rawAdc: data.fsr.force !== undefined ? round3(data.fsr.force) : this.state.fsr.rawAdc,
 				gripForce: forceN,
 				gripStability:
 					data.fsr.stability !== undefined
@@ -325,11 +329,23 @@ class ServerTelemetryState {
 		emgMvc?: number;
 		fsrZero?: number;
 		fsrMax?: number;
+		emgRepOnPct?: number;
+		emgRepOffPct?: number;
+		emgRepPeakPct?: number;
 	}) {
-		if (cal.emgBaseline !== undefined) this.state.calibration.emgBaseline = cal.emgBaseline;
-		if (cal.emgMvc !== undefined) this.state.calibration.emgMvc = cal.emgMvc;
-		if (cal.fsrZero !== undefined) this.state.calibration.fsrZero = cal.fsrZero;
-		if (cal.fsrMax !== undefined) this.state.calibration.fsrMax = cal.fsrMax;
+		const c = this.state.calibration;
+		if (cal.emgBaseline !== undefined) c.emgBaseline = cal.emgBaseline;
+		if (cal.emgMvc !== undefined) c.emgMvc = cal.emgMvc;
+		if (cal.fsrZero !== undefined) c.fsrZero = cal.fsrZero;
+		if (cal.fsrMax !== undefined) c.fsrMax = cal.fsrMax;
+		if (cal.emgRepOnPct !== undefined) c.emgRepOnPct = cal.emgRepOnPct;
+		if (cal.emgRepOffPct !== undefined) c.emgRepOffPct = cal.emgRepOffPct;
+		if (cal.emgRepPeakPct !== undefined) c.emgRepPeakPct = cal.emgRepPeakPct;
+		this.emgRepDetector.setConfig({
+			onPct: c.emgRepOnPct,
+			offPct: c.emgRepOffPct,
+			peakPct: c.emgRepPeakPct
+		});
 		this.broadcast('calibration', this.state.calibration);
 	}
 
@@ -341,6 +357,8 @@ class ServerTelemetryState {
 			return { ok: false, reason: 'conflict' };
 		}
 		this.recording = { userId, sessionId, startedAt: Date.now() };
+		// Each set's EMG rep count starts from zero.
+		this.emgRepDetector.reset();
 		return { ok: true };
 	}
 
