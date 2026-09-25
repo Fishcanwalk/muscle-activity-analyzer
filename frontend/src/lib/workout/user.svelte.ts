@@ -31,7 +31,8 @@ export interface UserProfile {
 	};
 	weeklyVolume: { week: string; clean: number; cheated: number }[];
 	/** emgPercent: % of calibrated MVC, not raw µV. */
-	formProgression: { session: string; purity: number; rom: number; emgPercent: number }[];
+	formProgression: { id: string; session: string; purity: number; rom: number; emgPercent: number }[];
+	/** One entry per workout session (sets grouped by session_id), newest first. */
 	historyLogs: {
 		id: string;
 		date: string;
@@ -42,7 +43,6 @@ export interface UserProfile {
 		cleanReps: number;
 		purity: number;
 		rom: number;
-		pumpDeltaT: number;
 		notes: string;
 	}[];
 }
