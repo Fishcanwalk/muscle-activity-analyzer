@@ -16,7 +16,8 @@
 		Plug,
 		Check,
 		CaretRight,
-		Crown
+		Crown,
+		UsersThree
 	} from 'phosphor-svelte';
 
 	interface Props {
@@ -182,5 +183,15 @@
 				{/if}
 			</button>
 		{/each}
+
+		<span class="mx-1 my-2 w-px bg-muted" aria-hidden="true"></span>
+
+		<a
+			href={resolve('/compare')}
+			class="flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-muted-foreground hover:text-foreground transition whitespace-nowrap"
+		>
+			<UsersThree size={14} class="text-purple-600" />
+			<span>เทียบผู้ใช้</span>
+		</a>
 	</nav>
 </header>

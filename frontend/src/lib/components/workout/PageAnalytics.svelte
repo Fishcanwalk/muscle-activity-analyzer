@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { history, type HistoryRange } from '$lib/workout/history.svelte';
 	import Chart from 'chart.js/auto';
-	import { Trophy, RotateCcw, LayoutDashboard } from 'lucide-svelte';
+	import { Trophy, RotateCcw, LayoutDashboard, Users } from 'lucide-svelte';
 
 	interface Props {
 		onStartNewWorkout: () => void;
@@ -149,6 +149,13 @@
 			>
 				<LayoutDashboard class="h-3.5 w-3.5" />
 				<span>Dashboard</span>
+			</a>
+			<a
+				href={resolve('/compare')}
+				class="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+			>
+				<Users class="h-3.5 w-3.5" />
+				<span>เทียบกับผู้ใช้อื่น</span>
 			</a>
 			<button
 				onclick={onStartNewWorkout}

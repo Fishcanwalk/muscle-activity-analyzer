@@ -74,6 +74,11 @@ export function groupSetsIntoSessions(sets: SetResult[]): WorkoutSession[] {
 	return sessions.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
 
+/** Every given set rolled into one summary (e.g. a user's whole history), or null if none. */
+export function summarizeSets(id: string, sets: SetResult[]): WorkoutSession | null {
+	return sets.length ? buildSession(id, sets) : null;
+}
+
 function buildSession(id: string, group: SetResult[]): WorkoutSession {
 	const ordered = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at));
 	const reps = ordered.flatMap((s) => s.reps ?? []);

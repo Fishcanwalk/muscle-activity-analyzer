@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { Lightning, Barbell, Layout, Crown } from 'phosphor-svelte';
+	import { Lightning, Barbell, Layout, Crown, UsersThree } from 'phosphor-svelte';
 
 	interface Props {
 		title: string;
@@ -15,6 +15,7 @@
 	const links = [
 		{ href: '/home', label: 'ออกกำลังกาย', icon: Barbell },
 		{ href: '/dashboard', label: 'ภาพรวม', icon: Layout },
+		{ href: '/compare', label: 'เทียบผู้ใช้', icon: UsersThree },
 		{ href: '/billing', label: 'แพ็กเกจ', icon: Crown }
 	] as const;
 </script>
