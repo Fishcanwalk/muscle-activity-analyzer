@@ -267,6 +267,23 @@ server {
     listen 80;
     server_name your-domain.com; # หรือใส่ IP Server หากยังไม่มีโดเมน
 
+    # Backend API and Swagger UI. Keep the original URI when proxying.
+    location = /health {
+        proxy_pass http://127.0.0.1:9000;
+    }
+    location /v1/ {
+        proxy_pass http://127.0.0.1:9000;
+    }
+    location = /users/me {
+        proxy_pass http://127.0.0.1:9000;
+    }
+    location = /docs {
+        proxy_pass http://127.0.0.1:9000;
+    }
+    location = /openapi.json {
+        proxy_pass http://127.0.0.1:9000;
+    }
+
     # Frontend Web Application & Telemetry Ingest
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -280,16 +297,6 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Direct Backend API docs (Swagger UI) - Optional
-    location /docs {
-        proxy_pass http://127.0.0.1:9000/docs;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    location /openapi.json {
-        proxy_pass http://127.0.0.1:9000/openapi.json;
-        proxy_set_header Host $host;
-    }
 }
 ```
 
@@ -299,6 +306,12 @@ sudo ln -s /etc/nginx/sites-available/cyberpump /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+ตรวจสอบจากโดเมนเดียวกับที่เปิด Swagger UI (เปลี่ยนเป็นโดเมนจริงของคุณ):
+```bash
+curl -i https://your-domain.com/health
+```
+ควรได้ `HTTP/2 200` หรือ `HTTP/1.1 200 OK` ก่อนกด Execute ใน `/docs` หากแก้ไฟล์คอนฟิกบนเซิร์ฟเวอร์โดยตรง ให้รัน `sudo nginx -t && sudo systemctl reload nginx` หลังแก้ไข
 
 ### 6.3 ขอใบรับรอง SSL ฟรี (HTTPS) ผ่าน Certbot
 *(ต้องมี Domain Name ชี้มาที่ IP Server แล้ว)*
