@@ -15,7 +15,8 @@
 		SignOut,
 		Plug,
 		Check,
-		CaretRight
+		CaretRight,
+		Crown
 	} from 'phosphor-svelte';
 
 	interface Props {
@@ -100,6 +101,14 @@
 				<Plug size={15} weight={hardware.tone === 'emerald' ? 'fill' : 'regular'} />
 				<span>{hardware.label}</span>
 			</div>
+
+			<a
+				href={resolve('/billing')}
+				class="rounded-lg border border-border p-2 text-muted-foreground transition hover:bg-muted hover:text-amber-600"
+				title="แพ็กเกจ"
+			>
+				<Crown size={16} />
+			</a>
 
 			<a
 				href={resolve('/dashboard')}

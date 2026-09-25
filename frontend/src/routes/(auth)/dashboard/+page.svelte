@@ -14,7 +14,8 @@
 		ArrowUpRight,
 		SignOut,
 		Target,
-		Pulse
+		Pulse,
+		Crown
 	} from 'phosphor-svelte';
 
 	let { data }: PageProps = $props();
@@ -50,6 +51,14 @@
 					<Barbell size={14} weight="bold" />
 					<span>เริ่มออกกำลังกาย</span>
 					<ArrowUpRight size={12} weight="bold" />
+				</a>
+
+				<a
+					href={resolve('/billing')}
+					class="p-1.5 rounded-lg border border-border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-amber-600 transition"
+					title="แพ็กเกจ"
+				>
+					<Crown size={16} />
 				</a>
 
 				<form action="/logout" method="POST" class="inline">
