@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
+from app.billing.entitlements import get_user_plan
 from app.db import get_database
 from app.models.session import SessionResult, SessionResultCreate, session_doc_to_model
 from app.security import get_current_user
@@ -30,7 +31,12 @@ async def list_session_results(
     current_user: dict = Depends(get_current_user),
 ) -> list[SessionResult]:
     db = get_database()
-    query: dict = {"user_id": str(current_user["_id"])}
+    user_id = str(current_user["_id"])
+    query: dict = {"user_id": user_id}
+    # Older sets stay stored; the plan only limits how far back they're returned.
+    history_days = (await get_user_plan(db, user_id)).features.history_days
+    if history_days is not None:
+        query["created_at"] = {"$gte": datetime.now(timezone.utc) - timedelta(days=history_days)}
     if session_id is not None:
         query["session_id"] = session_id
     cursor = db.session_results.find(query).sort("created_at", -1).limit(limit)
