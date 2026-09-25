@@ -29,12 +29,22 @@ class SessionResultCreate(BaseModel):
     session_id: str | None = None
     # How reps were counted for this set: "camera", "emg" or "hybrid".
     repSource: str | None = None
+    # The MVC (µV) calibrated at the start of this set's session. Calibration is redone
+    # every session, so a rep's peakEmg is only comparable as a % of its own session's MVC.
+    emgMvcUv: float | None = None
 
 
 class SessionResult(SessionResultCreate):
     id: str
     user_id: str
     created_at: datetime
+
+
+class SessionComparison(BaseModel):
+    # Every set of the requested session, and of the same user's session right before it
+    # (empty when this is their first one).
+    current: list[SessionResult]
+    previous: list[SessionResult]
 
 
 def session_doc_to_model(doc: dict) -> SessionResult:
@@ -56,4 +66,5 @@ def session_doc_to_model(doc: dict) -> SessionResult:
         timestamp=doc.get("timestamp"),
         session_id=doc.get("session_id"),
         repSource=doc.get("repSource"),
+        emgMvcUv=doc.get("emgMvcUv"),
     )
