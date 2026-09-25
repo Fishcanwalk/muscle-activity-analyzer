@@ -12,6 +12,11 @@ class TelemetryManager {
 		isHighTension: false
 	});
 
+	// Server-side EMG rep detector state (telemetryStore.ts state.emgRep), plus a local
+	// counter of detector reps the calibration page uses to try thresholds out.
+	emgRep = $state({ state: 'REST' as 'REST' | 'CONTRACT', count: 0 });
+	emgRepTestCount = $state(0);
+
 	mpu = $state({
 		concentricVelocity: 0.0,
 		rep1Velocity: 0.0,
@@ -25,6 +30,7 @@ class TelemetryManager {
 	});
 
 	fsr = $state({
+		rawAdc: 0,
 		gripForce: 0,
 		gripStabilityPercent: 0,
 		isStable: false
@@ -71,6 +77,21 @@ class TelemetryManager {
 		};
 	});
 
+	device = $state({ board: '', packetCount: 0 });
+
+	// The calibration the SvelteKit server is currently applying to incoming samples
+	// (telemetryStore.ts's state.calibration, included in every SSE packet). The
+	// calibration page needs it because rawBuffer arrives already baseline-adjusted.
+	serverCalibration = $state({
+		emgBaseline: 0,
+		emgMvc: 550,
+		fsrZero: 0,
+		fsrMax: 4095,
+		emgRepOnPct: 35,
+		emgRepOffPct: 20,
+		emgRepPeakPct: 45
+	});
+
 	isWebcamActive = $state(false);
 	connectionState = $state<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting');
 	isWsConnected = $derived(this.connectionState === 'connected');
@@ -86,6 +107,10 @@ class TelemetryManager {
 	private currentRepCheat: string | null = null;
 	private minElbowAngle = 180;
 	private maxElbowAngle = 0;
+	// Highest sEMG envelope seen since the last counted rep, whatever counted it.
+	private repEmgPeakPct = 0;
+	private repEmgPeakUv = 0;
+	private wasSetRunning = false;
 
 	constructor() {
 		if (typeof window !== 'undefined') {
@@ -115,6 +140,9 @@ class TelemetryManager {
 						this.connectionState = 'connected';
 						this.reconnectDelayMs = 1000;
 						this.streamHz = data.device.rateHz || 50;
+						this.device.board = data.device.board ?? '';
+						this.device.packetCount = data.device.packetCount ?? 0;
+						if (data.calibration) this.serverCalibration = data.calibration;
 
 						if (data.sensors) {
 							if (data.sensors.emg?.lastSeen) this.sensors.emg.lastSeen = data.sensors.emg.lastSeen;
@@ -124,6 +152,10 @@ class TelemetryManager {
 								this.sensors.vitals.lastSeen = data.sensors.vitals.lastSeen;
 						}
 
+						// A new set starts with clean per-rep trackers (no peak carried over from rest).
+						if (workout.isSetRunning && !this.wasSetRunning) this.resetRepTracking(this.cv.elbowAngle);
+						this.wasSetRunning = workout.isSetRunning;
+
 						if (data.emg) {
 							if (Array.isArray(data.emg.rawBuffer) && data.emg.rawBuffer.length > 0) {
 								this.emg.rawBuffer = data.emg.rawBuffer.map((r: number) => round3(r));
@@ -132,9 +164,19 @@ class TelemetryManager {
 							if (data.emg.mvcPercent !== undefined)
 								this.emg.mvcPercent = round3(data.emg.mvcPercent);
 							this.emg.isHighTension = data.emg.isHighTension;
+							if (data.emg.windowPeakPct > this.repEmgPeakPct) this.repEmgPeakPct = data.emg.windowPeakPct;
+							if (data.emg.rms > this.repEmgPeakUv) this.repEmgPeakUv = data.emg.rms;
+						}
+
+						if (data.emgRep) {
+							this.emgRep = { state: data.emgRep.state, count: data.emgRep.count };
+							if (workout.isSetRunning && workout.repSource === 'emg') {
+								workout.fsmState = data.emgRep.state === 'CONTRACT' ? 'PEAK' : 'START';
+							}
 						}
 
 						if (data.fsr) {
+							if (data.fsr.rawAdc !== undefined) this.fsr.rawAdc = data.fsr.rawAdc;
 							if (data.fsr.gripForce !== undefined) this.fsr.gripForce = round3(data.fsr.gripForce);
 							if (data.fsr.gripStability !== undefined)
 								this.fsr.gripStabilityPercent = round3(data.fsr.gripStability);
@@ -189,6 +231,13 @@ class TelemetryManager {
 					// Malformed button event -- ignore.
 				}
 			});
+			this.eventSource.addEventListener('emgRep', (e) => {
+				try {
+					this.onEmgRep(JSON.parse(e.data));
+				} catch {
+					// Malformed rep event -- ignore.
+				}
+			});
 			this.eventSource.onerror = () => {
 				this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
 				this.streamHz = 0;
@@ -210,6 +259,39 @@ class TelemetryManager {
 			this.reconnectTimer = null;
 			this.connectApiStream();
 		}, delay);
+	}
+
+	// A rep from the server-side EMG detector. Only counts toward the set in 'emg' mode;
+	// in the other modes it's just shown (and counted on the calibration test panel).
+	private onEmgRep(rep: { peakPct: number; peakUv: number; durationMs: number; isStrong: boolean }) {
+		this.emgRepTestCount += 1;
+		if (!workout.isSetRunning || workout.repSource !== 'emg') return;
+
+		// If the camera happens to be on too, its anti-cheat flags still apply.
+		const cameraCheat = this.isWebcamActive ? this.currentRepCheat : null;
+		const cheatReason = cameraCheat ?? (rep.isStrong ? null : 'Low Activation (EMG)');
+		workout.recordRep({
+			isClean: cheatReason === null,
+			concentricVelocity: this.mpu.concentricVelocity,
+			rom: this.isWebcamActive ? Math.max(0, Math.round(this.maxElbowAngle - this.minElbowAngle)) : 0,
+			cheatReason,
+			peakEmg: rep.peakUv,
+			velocityLossPercent: this.mpu.velocityLossPercent
+		});
+		this.resetRepTracking(this.cv.elbowAngle);
+	}
+
+	private resetRepTracking(elbowAngle: number) {
+		this.hadPeakInCurrentRep = false;
+		this.currentRepCheat = null;
+		this.minElbowAngle = 180;
+		this.maxElbowAngle = elbowAngle;
+		this.repEmgPeakPct = 0;
+		this.repEmgPeakUv = 0;
+	}
+
+	resetEmgRepTestCount() {
+		this.emgRepTestCount = 0;
 	}
 
 	setWebcamActive(active: boolean) {
@@ -240,31 +322,39 @@ class TelemetryManager {
 			if (data.isShoulderCheating) cheatWarnings.push('Shoulder Hiking Detected! (>3cm)');
 			workout.activeCheatWarnings = cheatWarnings;
 
-			// FSM Transitions:
+			// Elbow-angle FSM -- counts reps in 'camera' and 'hybrid' mode. In 'emg' mode
+			// the EMG detector counts (onEmgRep) and the camera only supplies cheat flags/ROM.
+			const cameraCounts = workout.repSource !== 'emg';
 			if (data.elbowAngle >= 140) {
-				if (this.hadPeakInCurrentRep) {
+				if (this.hadPeakInCurrentRep && cameraCounts) {
 					const rom = Math.max(50, Math.round(this.maxElbowAngle - this.minElbowAngle));
-					const isClean = !this.currentRepCheat;
+					let cheatReason = this.currentRepCheat;
+					// Hybrid: the arm moved through a full rep, but if the muscle never reached
+					// the "real effort" threshold the weight was swung up, not curled.
+					if (
+						!cheatReason &&
+						workout.repSource === 'hybrid' &&
+						this.sensorStatus.emg === 'live' &&
+						this.repEmgPeakPct < this.serverCalibration.emgRepPeakPct
+					) {
+						cheatReason = 'Low Activation (EMG)';
+					}
 
 					workout.recordRep({
-						isClean,
+						isClean: cheatReason === null,
 						concentricVelocity: this.mpu.concentricVelocity,
 						rom,
-						cheatReason: this.currentRepCheat,
-						peakEmg: this.emg.rms,
+						cheatReason,
+						peakEmg: this.repEmgPeakUv,
 						velocityLossPercent: this.mpu.velocityLossPercent
 					});
-
-					this.hadPeakInCurrentRep = false;
-					this.currentRepCheat = null;
-					this.minElbowAngle = 180;
-					this.maxElbowAngle = data.elbowAngle;
+					this.resetRepTracking(data.elbowAngle);
 				}
-				workout.fsmState = 'START';
+				if (cameraCounts) workout.fsmState = 'START';
 			} else if (data.elbowAngle < 140 && data.elbowAngle > 70) {
-				workout.fsmState = 'INFLECTION';
+				if (cameraCounts) workout.fsmState = 'INFLECTION';
 			} else if (data.elbowAngle <= 70) {
-				workout.fsmState = 'PEAK';
+				if (cameraCounts) workout.fsmState = 'PEAK';
 				this.hadPeakInCurrentRep = true;
 			}
 		}

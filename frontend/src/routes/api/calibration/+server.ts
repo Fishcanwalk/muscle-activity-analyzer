@@ -4,18 +4,26 @@ import type { components } from '$lib/api/paths/fastapi';
 
 type CalibrationCreate = components['schemas']['CalibrationCreate'];
 
-function isCalibrationCreate(body: unknown): body is CalibrationCreate {
-	if (!body || typeof body !== 'object') return false;
+const OPTIONAL_NUMBER_FIELDS = ['emgRepOnPct', 'emgRepOffPct', 'emgRepPeakPct'] as const;
+
+// The rep thresholds are optional (the backend fills in defaults when omitted).
+function parseCalibrationCreate(body: unknown): Partial<CalibrationCreate> | null {
+	if (!body || typeof body !== 'object') return null;
 	const b = body as Record<string, unknown>;
-	return (
-		typeof b.emgBaseline === 'number' &&
-		typeof b.emgMvc === 'number' &&
-		typeof b.fsrZero === 'number' &&
-		typeof b.fsrMax === 'number'
-	);
+	const required = ['emgBaseline', 'emgMvc', 'fsrZero', 'fsrMax'] as const;
+	if (!required.every((k) => typeof b[k] === 'number')) return null;
+	if (!OPTIONAL_NUMBER_FIELDS.every((k) => b[k] === undefined || typeof b[k] === 'number')) {
+		return null;
+	}
+	const parsed: Record<string, number> = {};
+	for (const k of [...required, ...OPTIONAL_NUMBER_FIELDS]) {
+		if (typeof b[k] === 'number') parsed[k] = b[k];
+	}
+	return parsed;
 }
 
-// Authenticated proxy to backend `/v1/calibration` (per-user, persisted in Mongo).
+// Authenticated proxy to backend `/v1/calibration` (per-user, persisted in Mongo as a
+// record of the latest calibration -- the app itself never reads it back, see DELETE).
 // The old unauthenticated write straight to the shared telemetryStore singleton has
 // been removed entirely -- no fallback (per the plan's decision 3: keeping that path
 // would let it silently stomp a real user's calibration). Every successful GET/POST
@@ -52,15 +60,21 @@ export const POST: RequestHandler = async (event) => {
 		return json({ success: false, error: 'Invalid JSON' }, { status: 400 });
 	}
 
-	if (!isCalibrationCreate(body)) {
+	const parsed = parseCalibrationCreate(body);
+	if (!parsed) {
 		return json(
-			{ success: false, error: 'Body must be { emgBaseline, emgMvc, fsrZero, fsrMax } (numbers)' },
+			{
+				success: false,
+				error:
+					'Body must be { emgBaseline, emgMvc, fsrZero, fsrMax } (numbers), optionally with emgRepOnPct/emgRepOffPct/emgRepPeakPct'
+			},
 			{ status: 400 }
 		);
 	}
 
 	const { data, error: calError } = await event.locals.fastapiClient.POST('/v1/calibration', {
-		body
+		// Required fields were checked above; the backend defaults any omitted thresholds.
+		body: parsed as CalibrationCreate
 	});
 	if (calError || !data) {
 		return json({ success: false, error: 'Failed to persist calibration' }, { status: 502 });
@@ -68,4 +82,13 @@ export const POST: RequestHandler = async (event) => {
 
 	serverTelemetry.setCalibration(data);
 	return json({ success: true, updated: data });
+};
+
+// A new workout session is starting: calibration must be redone, so the live conversion
+// goes back to defaults instead of the previous session's values. Only the in-memory
+// cache is reset; the backend record is left alone.
+export const DELETE: RequestHandler = async (event) => {
+	await resolveUser(event);
+	serverTelemetry.resetCalibration();
+	return json({ success: true, calibration: serverTelemetry.state.calibration });
 };

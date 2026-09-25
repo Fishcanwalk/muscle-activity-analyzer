@@ -1,191 +1,110 @@
 <script lang="ts">
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { formatDec, nToKg } from '$lib/utils/format';
-	import { Gauge, Target, HandPalm, Heartbeat, ThermometerSimple, TrendDown, Drop } from 'phosphor-svelte';
+	import { Gauge, HandPalm, Heartbeat } from 'phosphor-svelte';
 
-	function statusDotClass(status: 'live' | 'stale' | 'never') {
-		return status === 'live' ? 'bg-emerald-500' : status === 'stale' ? 'bg-amber-500' : 'bg-zinc-600';
-	}
+	type Status = 'live' | 'stale' | 'never';
+	const STATUS: Record<Status, { dot: string; label: string }> = {
+		live: { dot: 'bg-emerald-500', label: 'ทำงาน' },
+		stale: { dot: 'bg-amber-500', label: 'สัญญาณขาด' },
+		never: { dot: 'bg-muted-foreground/40', label: 'ไม่พบเซนเซอร์' }
+	};
+
+	// Summary cards only -- the raw MPU axes live in PageLiveStudio's developer section.
+	let cards = $derived([
+		{ id: 'mpu', title: 'ความเร็วการยก', icon: Gauge, status: telemetry.sensorStatus.mpu },
+		{ id: 'fsr', title: 'แรงบีบมือ', icon: HandPalm, status: telemetry.sensorStatus.fsr },
+		{ id: 'vitals', title: 'หัวใจและร่างกาย', icon: Heartbeat, status: telemetry.sensorStatus.vitals }
+	] as const);
 </script>
 
-<div class="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 font-sans text-zinc-100 antialiased">
-	<!-- VBT Velocity Card (spans 2 columns on desktop) -->
-	<div class="col-span-1 md:col-span-2 lg:col-span-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
-		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<div class="flex items-center gap-2">
-				<span
-					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.mpu)}"
-					title="MPU: {telemetry.sensorStatus.mpu}"
-				></span>
-				<span class="text-[10px] font-bold tracking-wider text-cyan-400 font-mono uppercase">
-					MPU-6050 (ESP32)
-				</span>
-				<span class="text-zinc-600">·</span>
-				<h4 class="text-xs font-semibold text-zinc-200">ฝึกตามความเร็วยก (VBT)</h4>
-			</div>
-			<span
-				class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono uppercase {telemetry.mpu
-					.isEffectiveZone
-					? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-					: 'border-zinc-700 bg-zinc-800 text-zinc-400'}"
-			>
-				{#if telemetry.mpu.isEffectiveZone}
-					<Target size={11} weight="bold" class="text-emerald-400" />
-					<span>โซนที่เหมาะสม (30-40%)</span>
-				{:else}
-					<Gauge size={11} class="text-zinc-400" />
-					<span>ปกติ</span>
-				{/if}
-			</span>
-		</div>
-
-		<div class="grid grid-cols-2 gap-2.5 py-2">
-			<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-				<div class="flex items-center justify-between text-zinc-400 text-[11px] mb-0.5 font-mono">
-					<span>ความเร็วในการยก</span>
-					<Gauge size={13} class="text-cyan-400" />
-				</div>
-				<div class="text-xl font-bold font-mono text-zinc-100">
-					{formatDec(telemetry.mpu.concentricVelocity)} <span class="text-xs font-normal text-zinc-400 font-sans">m/s</span>
-				</div>
-			</div>
-
-			<div class="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-				<div class="flex items-center justify-between text-zinc-400 text-[11px] mb-0.5 font-mono">
-					<span>ความเร็วที่ลดลง</span>
-					<TrendDown size={13} class={telemetry.mpu.velocityLossPercent >= 30 ? 'text-emerald-400' : 'text-zinc-400'} />
-				</div>
-				<div
-					class="text-xl font-bold font-mono {telemetry.mpu.velocityLossPercent >= 30
-						? 'text-emerald-400'
-						: 'text-zinc-100'}"
-				>
-					{formatDec(telemetry.mpu.velocityLossPercent)} <span class="text-xs font-normal text-zinc-400 font-sans">%</span>
-				</div>
-			</div>
-		</div>
-
-		<!-- Velocity Loss Progress Bar -->
-		<div class="relative mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-			<div
-				class="h-full bg-gradient-to-r from-cyan-500 via-emerald-400 to-rose-500 transition-all duration-150"
-				style="width: {Math.min(100, telemetry.mpu.velocityLossPercent)}%;"
-			></div>
-		</div>
-
-		<div class="flex items-center justify-between pt-1.5 mt-1.5 border-t border-zinc-800/80 text-[10px] font-mono">
-			<span class="text-zinc-400">ความเร็วครั้งแรก (จุดฐาน)</span>
-			<span class="text-zinc-200 font-semibold">{formatDec(telemetry.mpu.rep1Velocity)} m/s</span>
-		</div>
-
-		<!-- Raw Orientation & Acceleration (every MPU value, not just derived velocity) -->
-		<div class="grid grid-cols-5 gap-1.5 pt-1.5 mt-1.5 border-t border-zinc-800/80 text-center">
-			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">มุมก้ม-เงย</div>
-				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.pitch, 1)}°</div>
-			</div>
-			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">มุมเอียงข้าง</div>
-				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.roll, 1)}°</div>
-			</div>
-			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">Ax</div>
-				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.ax, 1)}</div>
-			</div>
-			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">Ay</div>
-				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.ay, 1)}</div>
-			</div>
-			<div class="rounded-md bg-zinc-950/60 px-1 py-1">
-				<div class="text-[9px] text-zinc-500 uppercase font-mono">Az</div>
-				<div class="text-[11px] font-semibold text-zinc-200 font-mono">{formatDec(telemetry.mpu.az, 1)}</div>
-			</div>
-		</div>
-		<div class="pt-0.5 text-center text-[9px] text-zinc-500 font-mono">ความเร่ง (m/s²) · มุมก้ม-เงย/เอียงข้าง (องศา)</div>
-	</div>
-
-	<!-- FSR Grip Force Card (1 column) -->
-	<div class="col-span-1 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
-		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<span class="flex items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-400 uppercase">
-				<span
-					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.fsr)}"
-					title="FSR: {telemetry.sensorStatus.fsr}"
-				></span>
-				FSR A2 (Uno)
-			</span>
-			<HandPalm size={14} class="text-zinc-400" />
-		</div>
-
-		<div class="py-2">
+<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+	{#each cards as card (card.id)}
+		<div class="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
 			<div class="flex items-center justify-between">
-				<div class="text-[11px] text-zinc-400 font-mono">แรงบีบมือ</div>
-				<span
-					class="rounded-full border px-1.5 py-0.5 text-[9px] font-mono uppercase {telemetry.fsr.isStable
-						? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-						: 'border-amber-500/40 bg-amber-500/10 text-amber-400'}"
-				>
-					{telemetry.fsr.isStable ? 'นิ่ง' : 'ไม่นิ่ง'}
+				<span class="flex items-center gap-2 text-sm font-semibold text-foreground">
+					<card.icon size={18} class="text-muted-foreground" />
+					{card.title}
+				</span>
+				<span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+					<span class={['h-2 w-2 rounded-full', STATUS[card.status].dot]}></span>
+					{STATUS[card.status].label}
 				</span>
 			</div>
-			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
-				{formatDec(nToKg(telemetry.fsr.gripForce), 1)} <span class="text-xs font-normal text-zinc-400 font-sans">กก.</span>
-			</div>
-		</div>
 
-		<div class="space-y-1">
-			<div class="flex justify-between text-[10px] font-mono">
-				<span class="text-zinc-400">ความนิ่งของแรงบีบ</span>
-				<span class="text-emerald-400 font-semibold">{formatDec(telemetry.fsr.gripStabilityPercent)}%</span>
-			</div>
-			<div class="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
-				<div class="h-full bg-emerald-500 transition-all" style="width: {telemetry.fsr.gripStabilityPercent}%"></div>
-			</div>
+			{#if card.id === 'mpu'}
+				<div class="text-3xl font-bold tabular-nums text-foreground">
+					{formatDec(telemetry.mpu.concentricVelocity, 2)}
+					<span class="text-base font-normal text-muted-foreground">m/s</span>
+				</div>
+				<div class="flex items-center justify-between text-sm">
+					<span class="text-muted-foreground">ช้าลงจากครั้งแรก</span>
+					<span
+						class={[
+							'font-semibold tabular-nums',
+							telemetry.mpu.isEffectiveZone ? 'text-emerald-600' : 'text-foreground'
+						]}
+					>
+						{Math.round(telemetry.mpu.velocityLossPercent)}%
+					</span>
+				</div>
+				<div class="h-2 w-full overflow-hidden rounded-full bg-muted">
+					<div
+						class="h-full bg-linear-to-r from-cyan-500 via-emerald-500 to-rose-500 transition-all duration-150"
+						style="width: {Math.min(100, telemetry.mpu.velocityLossPercent)}%;"
+					></div>
+				</div>
+				<p class="text-xs text-muted-foreground">
+					{telemetry.mpu.isEffectiveZone
+						? 'อยู่ในโซนกระตุ้นกล้ามเนื้อที่ดี (ช้าลง 25–45%)'
+						: 'เมื่อช้าลง 25–45% จากครั้งแรก คือช่วงที่กระตุ้นกล้ามเนื้อได้ดี'}
+				</p>
+			{:else if card.id === 'fsr'}
+				<div class="text-3xl font-bold tabular-nums text-foreground">
+					{formatDec(nToKg(telemetry.fsr.gripForce), 1)}
+					<span class="text-base font-normal text-muted-foreground">กก.</span>
+				</div>
+				<div class="flex items-center justify-between text-sm">
+					<span class="text-muted-foreground">ความนิ่งของมือ</span>
+					<span
+						class={[
+							'font-semibold tabular-nums',
+							telemetry.fsr.isStable ? 'text-emerald-600' : 'text-amber-600'
+						]}
+					>
+						{Math.round(telemetry.fsr.gripStabilityPercent)}% · {telemetry.fsr.isStable ? 'นิ่ง' : 'ไม่นิ่ง'}
+					</span>
+				</div>
+				<div class="h-2 w-full overflow-hidden rounded-full bg-muted">
+					<div
+						class="h-full bg-emerald-500 transition-all"
+						style="width: {telemetry.fsr.gripStabilityPercent}%"
+					></div>
+				</div>
+			{:else}
+				<div class="text-3xl font-bold tabular-nums text-foreground">
+					{telemetry.vitals.heartRate > 0 ? Math.round(telemetry.vitals.heartRate) : '–'}
+					<span class="text-base font-normal text-muted-foreground">BPM</span>
+				</div>
+				<dl class="grid grid-cols-3 gap-2 text-sm">
+					<div>
+						<dt class="text-xs text-muted-foreground">สูงสุด</dt>
+						<dd class="font-semibold tabular-nums">{Math.round(telemetry.vitals.peakHr) || '–'}</dd>
+					</div>
+					<div>
+						<dt class="text-xs text-muted-foreground">ออกซิเจน</dt>
+						<dd class="font-semibold tabular-nums">
+							{telemetry.vitals.spO2 > 0 ? `${Math.round(telemetry.vitals.spO2)}%` : '–'}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-xs text-muted-foreground">อุณหภูมิผิว</dt>
+						<dd class="font-semibold tabular-nums">
+							{telemetry.vitals.skinTemp > 0 ? `${formatDec(telemetry.vitals.skinTemp, 1)}°C` : '–'}
+						</dd>
+					</div>
+				</dl>
+			{/if}
 		</div>
-	</div>
-
-	<!-- MAX30102 / MLX90614 Vitals Card (1 column) -->
-	<div class="col-span-1 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 flex flex-col justify-between shadow-sm">
-		<div class="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-			<span class="flex items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-400 uppercase">
-				<span
-					class="w-1.5 h-1.5 rounded-full {statusDotClass(telemetry.sensorStatus.vitals)}"
-					title="Vitals: {telemetry.sensorStatus.vitals}"
-				></span>
-				MAX30102 / MLX
-			</span>
-			<Heartbeat size={14} class="text-rose-400" />
-		</div>
-
-		<div class="py-2">
-			<div class="flex items-center justify-between">
-				<div class="text-[11px] text-zinc-400 font-mono">อัตราการเต้นหัวใจ</div>
-				<span class="text-[10px] font-mono text-zinc-500">สูงสุด {formatDec(telemetry.vitals.peakHr)} BPM</span>
-			</div>
-			<div class="text-2xl font-bold font-mono text-zinc-100 mt-0.5">
-				{formatDec(telemetry.vitals.heartRate)} <span class="text-xs font-normal text-zinc-400 font-sans">BPM</span>
-			</div>
-		</div>
-
-		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
-			<span class="text-zinc-400 flex items-center gap-1">
-				<Drop size={13} class="text-sky-400" />
-				ออกซิเจนในเลือด:
-			</span>
-			<span class="text-sky-400 font-semibold">{formatDec(telemetry.vitals.spO2)}%</span>
-		</div>
-
-		<div class="flex items-center justify-between pt-1.5 border-t border-zinc-800/80 text-[11px] font-mono">
-			<span class="text-zinc-400 flex items-center gap-1">
-				<ThermometerSimple size={13} class="text-amber-400" />
-				อุณหภูมิผิว:
-			</span>
-			<span class="text-amber-400 font-semibold">
-				{formatDec(telemetry.vitals.skinTemp)}°C
-				<span class="text-zinc-500 font-normal"
-					>({telemetry.vitals.deltaTemp >= 0 ? '+' : ''}{formatDec(telemetry.vitals.deltaTemp)}°C)</span
-				>
-			</span>
-		</div>
-	</div>
+	{/each}
 </div>

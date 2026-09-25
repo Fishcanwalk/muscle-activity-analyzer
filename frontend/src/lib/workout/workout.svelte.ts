@@ -1,6 +1,6 @@
-import { history } from './history.svelte';
 import fastapiClient from '$lib/api/fastapi-client';
 import { toast } from 'svelte-sonner';
+import { DEFAULT_MVC_UV } from './metrics';
 
 export interface RepRecord {
 	repNumber: number;
@@ -11,6 +11,15 @@ export interface RepRecord {
 	peakEmg: number;
 	velocityLossPercent: number;
 }
+
+/**
+ * What counts reps during a set:
+ * - camera: MediaPipe elbow-angle FSM (telemetry.updateFromMediaPipe)
+ * - emg: server-side sEMG envelope detector (src/lib/server/emgRepDetector.ts)
+ * - hybrid: the camera counts, and the rep only counts as clean if the sEMG peak
+ *   during it reached the "real effort" threshold (catches momentum reps)
+ */
+export type RepSource = 'camera' | 'emg' | 'hybrid';
 
 export interface SetSummary {
 	setNumber: number;
@@ -26,8 +35,11 @@ export interface SetSummary {
 	reps: RepRecord[];
 	timestamp: string;
 	sessionId: string | null;
-	/** True once this set has been persisted to the backend via saveSummary(). */
-	saved?: boolean;
+	repSource: RepSource;
+	/** This session's calibrated MVC (µV), so the set's peakEmg can be read as % MVC later. */
+	emgMvcUv: number;
+	/** Client-side identity, used to track which sets saveSummary() already persisted. */
+	localId: string;
 }
 
 export interface SessionSummary {
@@ -41,9 +53,21 @@ export interface SessionSummary {
 }
 
 const SESSION_ID_STORAGE_KEY = 'workout.sessionId';
+const REP_SOURCE_STORAGE_KEY = 'workout.repSource';
+
+// crypto.randomUUID() only exists in secure contexts (https / localhost), but the
+// app is also opened over plain http on a LAN IP (see DEPLOYMENT.md).
+function newId(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return crypto.randomUUID();
+	}
+	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export type WorkoutTab = 'readiness' | 'studio' | 'postset' | 'analytics' | 'calibration';
 
 class WorkoutManager {
-	activeTab = $state<'readiness' | 'studio' | 'postset' | 'analytics' | 'calibration'>('studio');
+	activeTab = $state<WorkoutTab>('readiness');
 	exercise = $state('Biceps Curl');
 	weightKg = $state(12.5);
 	currentSet = $state(1);
@@ -64,13 +88,59 @@ class WorkoutManager {
 
 	sessionId = $state<string | null>(null);
 	setsInSession = $state<SetSummary[]>([]);
+	repSource = $state<RepSource>('camera');
+
+	// Pushed by calibration.svelte.ts (see its syncWorkout): whether every sensor was
+	// calibrated for this session, and the MVC measured.
+	calibrationReady = $state(false);
+	emgMvcUv = $state(DEFAULT_MVC_UV);
 
 	private timerInterval: any = null;
+	private tabInitialized = false;
+	// localIds of sets already POSTed. Tracked here rather than as a flag on the set:
+	// lastCompletedSet and the matching setsInSession entry are separate $state
+	// proxies, so a flag written through one is invisible through the other.
+	private savedSetIds = new Set<string>();
+	// In-flight saves, so a second save of the same set (e.g. "next set" clicked while
+	// the automatic save from stopSet() is still running) waits instead of re-POSTing.
+	private pendingSaves = new Map<string, Promise<{ success: boolean }>>();
 
 	constructor() {
 		if (typeof window !== 'undefined') {
 			const stored = sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
 			if (stored) this.sessionId = stored;
+			try {
+				const source = localStorage.getItem(REP_SOURCE_STORAGE_KEY);
+				if (source === 'camera' || source === 'emg' || source === 'hybrid') this.repSource = source;
+			} catch {
+				// Storage unavailable (private mode etc.) -- keep the default.
+			}
+		}
+	}
+
+	// Picks the tab Live Studio opens on, once per page load (later visits keep
+	// whatever tab the lifter was on): back to the studio if a workout is already in
+	// progress (sessionId survives a reload via sessionStorage), otherwise calibration,
+	// which every new session starts with.
+	initTab() {
+		if (this.tabInitialized) return;
+		this.tabInitialized = true;
+		this.activeTab = this.isSetRunning || this.sessionId ? 'studio' : 'calibration';
+	}
+
+	setCalibrationState(ready: boolean, emgMvcUv: number) {
+		this.calibrationReady = ready;
+		this.emgMvcUv = emgMvcUv;
+	}
+
+	// Locked while a set is running so a set's reps all come from one source.
+	setRepSource(source: RepSource) {
+		if (this.isSetRunning) return;
+		this.repSource = source;
+		try {
+			localStorage.setItem(REP_SOURCE_STORAGE_KEY, source);
+		} catch {
+			// Storage unavailable -- the choice just won't survive a reload.
 		}
 	}
 
@@ -85,11 +155,17 @@ class WorkoutManager {
 		});
 	}
 
-	startSet() {
+	/** Returns false (and sends the lifter to calibration) if this session isn't calibrated. */
+	startSet(): boolean {
+		if (!this.calibrationReady) {
+			toast.warning('ต้องปรับเทียบเซนเซอร์ของ session นี้ให้ครบก่อนเริ่มเซต');
+			this.activeTab = 'calibration';
+			return false;
+		}
 		if (this.timerInterval) clearInterval(this.timerInterval);
 
 		if (!this.sessionId) {
-			this.sessionId = crypto.randomUUID();
+			this.sessionId = newId();
 			if (typeof window !== 'undefined') {
 				sessionStorage.setItem(SESSION_ID_STORAGE_KEY, this.sessionId);
 			}
@@ -114,6 +190,7 @@ class WorkoutManager {
 		}, 1000);
 
 		this.postRecordingAction('start');
+		return true;
 	}
 
 	stopSet() {
@@ -134,7 +211,10 @@ class WorkoutManager {
 			highTensionTutSeconds: this.highTensionTutSeconds,
 			reps: [...this.repsInSet],
 			timestamp: new Date().toLocaleTimeString(),
-			sessionId: this.sessionId
+			sessionId: this.sessionId,
+			repSource: this.repSource,
+			emgMvcUv: this.emgMvcUv,
+			localId: newId()
 		};
 		this.lastCompletedSet = completedSet;
 		this.setsInSession = [...this.setsInSession, completedSet];
@@ -143,11 +223,15 @@ class WorkoutManager {
 		this.activeCheatWarnings = [];
 
 		this.postRecordingAction('stop');
+		// Persist right away so the set survives even if the lifter never presses
+		// "เริ่มเซตถัดไป"/"จบการออกกำลังกาย" (e.g. just switches tabs or closes the page).
+		void this.saveSummary(completedSet, { silent: true });
 	}
 
 	// Aggregates every set completed since the last endWorkout() (or app start) into
 	// a single session-level summary, then clears session state (sessionId,
-	// sessionStorage, setsInSession) so the next startSet() begins a fresh workout.
+	// sessionStorage, setsInSession, lastCompletedSet, set counter) so the next
+	// startSet() begins a fresh workout.
 	endWorkout(): SessionSummary {
 		const sets = this.setsInSession;
 		const sessionId = this.sessionId;
@@ -169,6 +253,8 @@ class WorkoutManager {
 			sessionStorage.removeItem(SESSION_ID_STORAGE_KEY);
 		}
 		this.setsInSession = [];
+		this.lastCompletedSet = null;
+		this.currentSet = 1;
 
 		return summary;
 	}
@@ -219,23 +305,23 @@ class WorkoutManager {
 		this.highTensionTutSeconds = Number((this.highTensionTutSeconds + seconds).toFixed(1));
 	}
 
-	// Shared by saveAllPendingSets below (PagePostSet.svelte's "เริ่มเซตถัดไป" /
-	// "จบการออกกำลังกาย" buttons, with a mock fallback summary for the demo view)
-	// and handleRemoteButton below (real summary only) so both save identically.
-	// Idempotent: a set already marked `saved` is skipped instead of re-POSTed, so
-	// calling this again for a set the lifter already moved past is a no-op.
+	// Called automatically by stopSet(), and again by PagePostSet.svelte's buttons,
+	// saveAllPendingSets and handleRemoteButton. Idempotent: a set already in
+	// savedSetIds (or currently being saved) is not re-POSTed.
 	async saveSummary(summary: SetSummary, opts: { silent?: boolean } = {}): Promise<{ success: boolean }> {
-		if (summary.saved) return { success: true };
+		if (this.savedSetIds.has(summary.localId)) return { success: true };
+		const pending = this.pendingSaves.get(summary.localId);
+		if (pending) return pending;
+		const save = this.postSummary(summary, opts);
+		this.pendingSaves.set(summary.localId, save);
+		try {
+			return await save;
+		} finally {
+			this.pendingSaves.delete(summary.localId);
+		}
+	}
 
-		history.addCompletedSession({
-			session: new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
-			weight: summary.weightKg,
-			cleanReps: summary.cleanReps,
-			purity: summary.formPurityPercent,
-			sEmgRms: 74,
-			rom: 123,
-			cleanVolume: summary.weightKg * summary.cleanReps
-		});
+	private async postSummary(summary: SetSummary, opts: { silent?: boolean }): Promise<{ success: boolean }> {
 
 		// Built as a standalone variable (not an inline literal) so extra fields like
 		// session_id -- present on the backend model but not yet reflected in the
@@ -254,12 +340,14 @@ class WorkoutManager {
 			highTensionTutSeconds: summary.highTensionTutSeconds,
 			reps: summary.reps,
 			timestamp: summary.timestamp,
-			session_id: summary.sessionId
+			session_id: summary.sessionId,
+			repSource: summary.repSource,
+			emgMvcUv: summary.emgMvcUv
 		};
 
 		const { error } = await fastapiClient.POST('/v1/sessions', { body });
 
-		if (!error) summary.saved = true;
+		if (!error) this.savedSetIds.add(summary.localId);
 
 		if (!opts.silent) {
 			if (error) {
@@ -272,13 +360,12 @@ class WorkoutManager {
 		return { success: !error };
 	}
 
-	// Saves every set completed so far this workout that hasn't been persisted yet
-	// (each already saved silently when the lifter moved to the next set -- see
-	// PagePostSet.svelte's handleNextSet -- so normally this only has the most
-	// recent set left to save). Called right before endWorkout() so "จบการออกกำลังกาย"
-	// can never silently discard a set the way it used to.
+	// Saves every set completed so far this workout that hasn't been persisted yet.
+	// Each set is already saved automatically by stopSet(), so this only retries sets
+	// whose save failed (e.g. the server was unreachable). Called right before
+	// endWorkout() so "จบการออกกำลังกาย" never silently discards a set.
 	async saveAllPendingSets(): Promise<{ success: boolean }> {
-		const pending = this.setsInSession.filter((s) => !s.saved);
+		const pending = this.setsInSession.filter((s) => !this.savedSetIds.has(s.localId));
 		if (pending.length === 0) return { success: true };
 
 		let allOk = true;
@@ -313,10 +400,8 @@ class WorkoutManager {
 			} else if (this.activeTab === 'postset') {
 				if (this.lastCompletedSet) await this.saveSummary(this.lastCompletedSet, { silent: true });
 				this.nextSet();
-				this.startSet();
-				this.activeTab = 'studio';
-			} else {
-				this.startSet();
+				if (this.startSet()) this.activeTab = 'studio';
+			} else if (this.startSet()) {
 				this.activeTab = 'studio';
 			}
 			return;

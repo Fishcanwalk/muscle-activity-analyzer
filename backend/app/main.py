@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import create_indexes, get_database
-from app.routers import auth, calibration, health, sessions, telemetry, users
+from app.routers import auth, billing, calibration, health, sessions, telemetry, users
 from app.seed import seed_demo_users
 
 
@@ -37,4 +37,5 @@ app.include_router(users.router)
 app.include_router(telemetry.router)
 app.include_router(sessions.router)
 app.include_router(calibration.router)
+app.include_router(billing.router)
 app.include_router(health.router)

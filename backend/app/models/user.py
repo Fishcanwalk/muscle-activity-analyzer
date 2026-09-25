@@ -25,6 +25,16 @@ class User(BaseModel):
     is_active: bool = True
 
 
+class PublicUser(BaseModel):
+    # What other users may see: no email, no roles.
+    id: str
+    name: str
+    avatar: str | None = None
+    sessionCount: int = 0
+    setCount: int = 0
+    lastWorkoutAt: datetime | None = None
+
+
 class Token(BaseModel):
     access_token: str
     refresh_token: str

@@ -1,34 +1,39 @@
 import { telemetry } from './telemetry.svelte';
 
+const TEST_SECONDS = 5;
+
 class ReadinessManager {
 	isTesting = $state(false);
-	countdownSeconds = $state(5);
+	countdownSeconds = $state(TEST_SECONDS);
 	currentGripKg = $state(0);
 	peakGripKg = $state(0);
 	baselineGripKg = $state(50.0);
-	cnsReadinessPercent = $state(96);
+	/** null until a grip test has finished with a usable reading. */
+	cnsReadinessPercent = $state<number | null>(null);
 
-	restingHr = $derived(telemetry.vitals.heartRate > 0 ? telemetry.vitals.heartRate : 62);
-	restingSpo2 = $derived(telemetry.vitals.spO2 > 0 ? telemetry.vitals.spO2 : 99);
-	baselineSkinTemp = $derived(telemetry.vitals.skinTemp > 0 ? telemetry.vitals.skinTemp : 33.4);
+	// 0 means "no reading yet" -- the page shows a dash instead of a made-up number.
+	restingHr = $derived(Math.round(telemetry.vitals.heartRate));
+	restingSpo2 = $derived(Math.round(telemetry.vitals.spO2));
+	baselineSkinTemp = $derived(telemetry.vitals.skinTemp);
 
-	overallScore = $state(95);
-	statusLabel = $state('Optimal Readiness');
+	overallScore = $state<number | null>(null);
+	statusLabel = $state('ยังไม่ได้ทดสอบ');
 	recommendation = $state(
-		'ระบบประสาทและร่างกายฟื้นตัวเต็มที่ (95%) พร้อมสำหรับการฝึกระดับ High Intensity (RPE 8.5–9.5) สามารถดันน้ำหนักหรือเพิ่ม Rep ได้ตามโปรแกรม'
+		'กด "เริ่มทดสอบแรงบีบ" แล้วบีบเซนเซอร์เต็มแรงค้างไว้ 5 วินาที ระบบจะเทียบกับแรงบีบปกติของคุณเพื่อประเมินความล้าก่อนเริ่มฝึก'
 	);
 	isComplete = $state(false);
 
-	private testInterval: any = null;
+	private testInterval: ReturnType<typeof setInterval> | null = null;
 
 	startGripTest() {
+		if (this.testInterval) clearInterval(this.testInterval);
 		this.isTesting = true;
-		this.countdownSeconds = 5;
+		this.countdownSeconds = TEST_SECONDS;
 		this.peakGripKg = 0;
 		this.currentGripKg = 0;
 		this.isComplete = false;
 
-		let secondsLeft = 5;
+		let secondsLeft = TEST_SECONDS;
 		let highestGrip = 0;
 
 		this.testInterval = setInterval(() => {
@@ -43,8 +48,17 @@ class ReadinessManager {
 			this.peakGripKg = highestGrip;
 
 			if (secondsLeft <= 0) {
-				clearInterval(this.testInterval);
+				if (this.testInterval) clearInterval(this.testInterval);
 				this.testInterval = null;
+				this.isTesting = false;
+				this.currentGripKg = highestGrip;
+
+				if (highestGrip <= 0) {
+					this.statusLabel = 'ไม่พบแรงบีบ';
+					this.recommendation =
+						'ไม่ได้รับค่าจากเซนเซอร์แรงบีบ (FSR) ตรวจสอบการเชื่อมต่อหรือปรับเทียบเซนเซอร์ แล้วทดสอบใหม่';
+					return;
+				}
 
 				const readinessPct = Math.round((highestGrip / this.baselineGripKg) * 100);
 				let status = 'Optimal Readiness';
@@ -59,21 +73,20 @@ class ReadinessManager {
 					rec = 'ความพร้อมปานกลาง แนะนำให้รักษาความหนักเท่าเดิม ไม่ควรฝืนเร่งน้ำหนักในวันนี้';
 				}
 
-				this.isTesting = false;
 				this.isComplete = true;
 				this.cnsReadinessPercent = readinessPct;
 				this.overallScore = Math.min(100, readinessPct);
 				this.statusLabel = status;
 				this.recommendation = rec;
-				this.currentGripKg = highestGrip;
 			}
 		}, 1000);
 	}
 
 	resetTest() {
 		if (this.testInterval) clearInterval(this.testInterval);
+		this.testInterval = null;
 		this.isTesting = false;
-		this.countdownSeconds = 5;
+		this.countdownSeconds = TEST_SECONDS;
 		this.currentGripKg = 0;
 		this.peakGripKg = 0;
 		this.isComplete = false;

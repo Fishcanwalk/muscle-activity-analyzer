@@ -1,151 +1,109 @@
-export interface MetricComparison {
-	name: string;
-	prev: string;
-	curr: string;
-	delta: string;
-	isPositive: boolean;
-}
+import fastapiClient from '$lib/api/fastapi-client';
+import {
+	compareSessions,
+	groupSetsIntoSessions,
+	progressVerdict,
+	thaiDate,
+	thaiShortDate,
+	type SetResult,
+	type WorkoutSession
+} from './metrics';
 
 export interface SessionTrendPoint {
+	id: string;
 	session: string;
 	weight: number;
 	cleanReps: number;
 	purity: number;
-	/** % of the user's calibrated MVC, not the raw µV the sensor/backend use internally. */
+	/** % of each session's own calibrated MVC, not the raw µV the sensor/backend use. */
 	sEmgRms: number;
 	rom: number;
 	cleanVolume: number;
 }
 
-// Demo comparison dates are computed relative to the real "today" (instead of a
-// hardcoded string) so the "(วันนี้)" label in the UI never drifts out of sync with
-// the actual date.
-function thaiDateLabel(date: Date): string {
-	return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
-}
+export type HistoryRange = 'last5' | 'last30days' | 'all';
 
-const today = new Date();
-const twoSessionsAgo = new Date(today);
-twoSessionsAgo.setDate(today.getDate() - 2);
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Loaded from the backend (GET /v1/sessions) every time the Analytics tab mounts,
+// so sets saved earlier in the same workout show up without a page reload.
 class HistoryManager {
-	comparison = $state({
-		previousDate: thaiDateLabel(twoSessionsAgo),
-		currentDate: thaiDateLabel(today),
-		metrics: [
-			{
-				name: 'น้ำหนักดัมเบล (Load)',
-				prev: '12.5 kg',
-				curr: '12.5 kg',
-				delta: '0% (คงที่)',
-				isPositive: true
-			},
-			{
-				name: 'Clean Reps (ไม่โกง)',
-				prev: '18 ครั้ง',
-				curr: '22 ครั้ง',
-				delta: '+22.2%',
-				isPositive: true
-			},
-			{
-				name: 'Form Purity (% ท่าคลีน)',
-				prev: '78.0%',
-				curr: '91.6%',
-				delta: '+13.6%',
-				isPositive: true
-			},
-			{
-				name: 'Average ROM (องศาข้อศอก)',
-				prev: '118°',
-				curr: '124°',
-				delta: '+6° (ยืดลึกขึ้น)',
-				isPositive: true
-			},
-			{
-				name: 'ออกแรงกล้ามเนื้อสูงสุด',
-				prev: '67%',
-				curr: '73%',
-				delta: '+8.9% (สั่งการกล้ามเนื้อดีขึ้น)',
-				isPositive: true
-			},
-			{
-				name: 'High-Tension TUT',
-				prev: '62 วินาที',
-				curr: '78 วินาที',
-				delta: '+25.8% (Tension นานขึ้น)',
-				isPositive: true
-			},
-			{
-				name: 'Grip Fatigue Drop',
-				prev: '-18%',
-				curr: '-11%',
-				delta: '+7% (มือนิ่งขึ้น)',
-				isPositive: true
-			},
-			{
-				name: 'Muscle Pump (ΔT)',
-				prev: '+1.4°C',
-				curr: '+1.8°C',
-				delta: '+0.4°C (Hyperemia แน่นขึ้น)',
-				isPositive: true
-			}
-		] as MetricComparison[]
+	status = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+	sets = $state.raw<SetResult[]>([]);
+
+	exerciseFilter = $state<string>('all');
+	range = $state<HistoryRange>('last5');
+
+	exercises = $derived([...new Set(this.sets.map((s) => s.exercise))].sort());
+
+	sessions = $derived.by((): WorkoutSession[] => {
+		const filtered =
+			this.exerciseFilter === 'all'
+				? this.sets
+				: this.sets.filter((s) => s.exercise === this.exerciseFilter);
+		const sessions = groupSetsIntoSessions(filtered);
+		if (this.range === 'last5') return sessions.slice(-5);
+		if (this.range === 'last30days') {
+			const cutoff = Date.now() - THIRTY_DAYS_MS;
+			return sessions.filter((s) => new Date(s.startedAt).getTime() >= cutoff);
+		}
+		return sessions;
 	});
 
-	sessionsTrend = $state<SessionTrendPoint[]>([
-		{
-			session: '28 ส.ค.',
-			weight: 10.0,
-			cleanReps: 24,
-			purity: 72,
-			sEmgRms: 59,
-			rom: 112,
-			cleanVolume: 240
-		},
-		{
-			session: '31 ส.ค.',
-			weight: 10.0,
-			cleanReps: 27,
-			purity: 79,
-			sEmgRms: 62,
-			rom: 115,
-			cleanVolume: 270
-		},
-		{
-			session: '4 ก.ย.',
-			weight: 12.5,
-			cleanReps: 16,
-			purity: 70,
-			sEmgRms: 65,
-			rom: 114,
-			cleanVolume: 200
-		},
-		{
-			session: '9 ก.ย.',
-			weight: 12.5,
-			cleanReps: 18,
-			purity: 78,
-			sEmgRms: 67,
-			rom: 118,
-			cleanVolume: 225
-		},
-		{
-			session: '11 ก.ย.',
-			weight: 12.5,
-			cleanReps: 22,
-			purity: 91,
-			sEmgRms: 73,
-			rom: 124,
-			cleanVolume: 275
-		}
-	]);
-
-	takeawayNote = $state(
-		`แม้จะใช้น้ำหนักเท่าเดิม (12.5 kg) แต่คุณสามารถขยาย ROM ได้กว้างขึ้น 6 องศา (เหยียดลึกขึ้นเข้าจุด Stretch-Mediated Hypertrophy), สั่งการกล้ามเนื้อ (Neural Drive) ผ่านคลื่น sEMG ได้สูงขึ้น 8.9% โดยที่อาการโกงท่าลดลงอย่างมีนัยสำคัญ ถือเป็น Progressive Overload ตามหลักวิทยาศาสตร์การกีฬาอย่างแท้จริง!`
+	sessionsTrend = $derived<SessionTrendPoint[]>(
+		this.sessions.map((s) => ({
+			id: s.id,
+			session: thaiShortDate(s.startedAt),
+			weight: s.maxWeightKg,
+			cleanReps: s.cleanReps,
+			purity: s.purityPercent,
+			sEmgRms: s.peakEmgPercent,
+			rom: s.avgRomDeg,
+			cleanVolume: s.cleanVolumeKg
+		}))
 	);
 
-	addCompletedSession(sessionData: SessionTrendPoint) {
-		this.sessionsTrend = [...this.sessionsTrend, sessionData];
+	/** Latest session vs the one before it; null until there are at least two. */
+	comparison = $derived.by(() => {
+		const n = this.sessions.length;
+		if (n < 2) return null;
+		const prev = this.sessions[n - 2];
+		const curr = this.sessions[n - 1];
+		return {
+			previousDate: thaiDate(prev.startedAt),
+			currentDate: thaiDate(curr.startedAt),
+			prev,
+			curr,
+			metrics: compareSessions(prev, curr)
+		};
+	});
+
+	takeawayNote = $derived.by(() => {
+		if (this.status === 'loading' || this.status === 'idle') return 'กำลังโหลดข้อมูล...';
+		if (this.status === 'error') return 'โหลดประวัติการฝึกจากเซิร์ฟเวอร์ไม่สำเร็จ';
+		const c = this.comparison;
+		if (!c) {
+			return this.sessions.length === 0
+				? 'ยังไม่มีประวัติการฝึก เริ่มเซตแรกได้ที่ Live Studio'
+				: 'ต้องมีอย่างน้อย 2 เซสชันจึงจะเปรียบเทียบพัฒนาการได้';
+		}
+		return `เทียบกับเซสชันก่อนหน้า: ${progressVerdict(c.prev, c.curr)}`;
+	});
+
+	async load() {
+		this.status = 'loading';
+		try {
+			const setsRes = await fastapiClient.GET('/v1/sessions', { params: { query: { limit: 200 } } });
+			if (setsRes.error || !setsRes.data) {
+				this.status = 'error';
+				return;
+			}
+			this.sets = setsRes.data;
+			this.status = 'ready';
+		} catch {
+			// Network failure (openapi-fetch throws rather than returning `error`).
+			this.status = 'error';
+		}
 	}
 }
 

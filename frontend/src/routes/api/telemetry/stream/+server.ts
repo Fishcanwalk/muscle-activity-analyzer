@@ -32,9 +32,20 @@ export const GET: RequestHandler = async () => {
 				}
 			});
 
+			// One event per rep counted by the server-side EMG detector (emgRepDetector.ts)
+			const cleanupEmgRep = serverTelemetry.subscribe('emgRep', (data) => {
+				try {
+					const msg = `event: emgRep\ndata: ${JSON.stringify(data)}\n\n`;
+					controller.enqueue(encoder.encode(msg));
+				} catch {
+					// Client disconnected
+				}
+			});
+
 			cleanup = () => {
 				cleanupTelemetry();
 				cleanupButton();
+				cleanupEmgRep();
 			};
 		},
 		cancel() {
