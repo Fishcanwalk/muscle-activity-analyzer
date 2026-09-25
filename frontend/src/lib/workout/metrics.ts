@@ -109,3 +109,80 @@ export function thaiDate(iso: string): string {
 export function thaiShortDate(iso: string): string {
 	return new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
 }
+
+export interface MetricComparison {
+	name: string;
+	prev: string;
+	curr: string;
+	delta: string;
+	isPositive: boolean;
+}
+
+function percentDelta(prev: number, curr: number): string {
+	if (prev === 0) return curr === 0 ? '0% (คงที่)' : 'ใหม่';
+	const pct = ((curr - prev) / prev) * 100;
+	if (Math.abs(pct) < 0.05) return '0% (คงที่)';
+	return `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`;
+}
+
+function metric(
+	name: string,
+	prev: number,
+	curr: number,
+	unit: string,
+	digits = 0
+): MetricComparison {
+	return {
+		name,
+		prev: `${prev.toFixed(digits)}${unit}`,
+		curr: `${curr.toFixed(digits)}${unit}`,
+		delta: percentDelta(prev, curr),
+		// Every metric below is "higher is better".
+		isPositive: curr >= prev
+	};
+}
+
+/** Side-by-side metrics of two sessions of the same user, previous first. */
+export function compareSessions(prev: WorkoutSession, curr: WorkoutSession): MetricComparison[] {
+	return [
+		metric('น้ำหนักสูงสุด (Load)', prev.maxWeightKg, curr.maxWeightKg, ' kg', 1),
+		metric('Clean Reps (ไม่โกง)', prev.cleanReps, curr.cleanReps, ' ครั้ง'),
+		metric('Form Purity (% ท่าคลีน)', prev.purityPercent, curr.purityPercent, '%'),
+		metric(
+			'Clean Volume (น้ำหนัก × ครั้งที่ไม่โกง)',
+			prev.cleanVolumeKg,
+			curr.cleanVolumeKg,
+			' kg',
+			1
+		),
+		metric('Average ROM (องศาข้อศอก)', prev.avgRomDeg, curr.avgRomDeg, '°'),
+		metric('ออกแรงกล้ามเนื้อสูงสุด (% MVC)', prev.peakEmgPercent, curr.peakEmgPercent, '%'),
+		metric('High-Tension TUT', prev.highTensionTutSeconds, curr.highTensionTutSeconds, ' วินาที', 1)
+	];
+}
+
+/** One-line reading of what changed from `prev` to `curr`, and what to do about it. */
+export function progressVerdict(prev: WorkoutSession, curr: WorkoutSession): string {
+	const parts: string[] = [];
+	const volumeDiff = curr.cleanVolumeKg - prev.cleanVolumeKg;
+	parts.push(
+		volumeDiff >= 0
+			? `Clean Volume เพิ่มขึ้น ${volumeDiff.toFixed(1)} kg`
+			: `Clean Volume ลดลง ${Math.abs(volumeDiff).toFixed(1)} kg`
+	);
+	const purityDiff = curr.purityPercent - prev.purityPercent;
+	if (purityDiff !== 0) {
+		parts.push(`ท่าคลีน${purityDiff > 0 ? 'ดีขึ้น' : 'ลดลง'} ${Math.abs(purityDiff)}%`);
+	}
+	const romDiff = curr.avgRomDeg - prev.avgRomDeg;
+	if (romDiff !== 0) {
+		parts.push(`ROM ${romDiff > 0 ? 'กว้างขึ้น' : 'แคบลง'} ${Math.abs(romDiff)}°`);
+	}
+	const verdict =
+		volumeDiff > 0 && purityDiff >= 0
+			? 'เป็น Progressive Overload ที่ไม่ได้มาจากการโกงท่า'
+			: purityDiff < 0
+				? 'ควรลดน้ำหนักหรือจำนวนครั้งลงเพื่อรักษาฟอร์ม'
+				: 'รักษาความหนักเท่าเดิมและเน้นคุณภาพของแต่ละครั้ง';
+	return `${parts.join(', ')} — ${verdict}`;
+}

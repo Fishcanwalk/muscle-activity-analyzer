@@ -2,6 +2,15 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { workout, type SessionSummary } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
+	import { calibration } from '$lib/workout/calibration.svelte';
+	import {
+		compareSessions,
+		groupSetsIntoSessions,
+		progressVerdict,
+		thaiDate,
+		type WorkoutSession
+	} from '$lib/workout/metrics';
+	import fastapiClient from '$lib/api/fastapi-client';
 	import { formatDec } from '$lib/utils/format';
 	import { Timer, ArrowRight, CheckCircle2, AlertTriangle, Flag } from 'lucide-svelte';
 
@@ -77,15 +86,44 @@
 	// tabs) so the lifter sees them before moving on -- see handleCloseSummary.
 	let sessionSummary = $state<SessionSummary | null>(null);
 
+	// The session that just ended next to this user's previous one, from the backend
+	// (GET /v1/sessions/{id}/comparison only ever looks at the caller's own sets).
+	type Comparison =
+		| { status: 'loading' | 'error' | 'first' }
+		| { status: 'ready'; prev: WorkoutSession; curr: WorkoutSession };
+	let comparison = $state<Comparison | null>(null);
+
+	async function loadComparison(sessionId: string) {
+		comparison = { status: 'loading' };
+		try {
+			const { data, error } = await fastapiClient.GET('/v1/sessions/{session_id}/comparison', {
+				params: { path: { session_id: sessionId } }
+			});
+			if (error || !data) {
+				comparison = { status: 'error' };
+				return;
+			}
+			const [curr] = groupSetsIntoSessions(data.current);
+			const [prev] = groupSetsIntoSessions(data.previous);
+			comparison = prev ? { status: 'ready', prev, curr } : { status: 'first' };
+		} catch {
+			comparison = { status: 'error' };
+		}
+	}
+
 	async function handleEndWorkout() {
 		isBusy = true;
 		await workout.saveAllPendingSets();
 		sessionSummary = workout.endWorkout();
 		isBusy = false;
+		// The next session has to calibrate again from scratch.
+		void calibration.startFresh();
+		if (sessionSummary.sessionId) void loadComparison(sessionSummary.sessionId);
 	}
 
 	function handleCloseSummary() {
 		sessionSummary = null;
+		comparison = null;
 		onFinishSession();
 	}
 </script>
@@ -136,6 +174,61 @@
 					<span class="text-xs text-muted-foreground">Form Purity เฉลี่ย</span>
 					<div class="text-xl font-black text-cyan-600">{sessionSummary.avgFormPurityPercent}%</div>
 				</div>
+			</div>
+
+			<div class="rounded-lg border border-border bg-background/60 p-4">
+				<h4 class="text-base font-bold text-foreground">เทียบกับ session ก่อนหน้าของคุณ</h4>
+				{#if !comparison || comparison.status === 'loading'}
+					<p class="mt-2 text-sm text-muted-foreground">กำลังโหลดข้อมูล session ก่อนหน้า...</p>
+				{:else if comparison.status === 'error'}
+					<p class="mt-2 text-sm text-rose-600">
+						โหลดผลเทียบไม่สำเร็จ (session นี้อาจบันทึกไปยังเซิร์ฟเวอร์ไม่ครบ) ดูพัฒนาการได้ที่หน้า Analytics
+					</p>
+				{:else if comparison.status === 'first'}
+					<p class="mt-2 text-sm text-muted-foreground">
+						นี่คือ session แรกของคุณ ครั้งหน้าระบบจะนำผลครั้งนี้มาเทียบให้
+					</p>
+				{:else if comparison.status === 'ready'}
+					{@const { prev, curr } = comparison}
+					<p class="mt-1 text-sm text-muted-foreground">
+						{thaiDate(prev.startedAt)} ({prev.exercises.join(', ')}) → ครั้งนี้ ({curr.exercises.join(', ')})
+					</p>
+					{#if prev.exercises.join() !== curr.exercises.join()}
+						<p class="mt-1 text-sm text-amber-700">ท่าที่เล่นไม่เหมือนกัน ผลเทียบบางตัวอาจเทียบกันตรง ๆ ไม่ได้</p>
+					{/if}
+					<div class="mt-3 overflow-x-auto">
+						<table class="w-full text-left text-sm">
+							<thead>
+								<tr class="border-b border-border text-muted-foreground">
+									<th class="p-2">ตัวชี้วัด</th>
+									<th class="p-2">ครั้งก่อน</th>
+									<th class="p-2">ครั้งนี้</th>
+									<th class="p-2">เปลี่ยนแปลง</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-border">
+								{#each compareSessions(prev, curr) as m (m.name)}
+									<tr>
+										<td class="p-2 font-medium text-foreground">{m.name}</td>
+										<td class="p-2 tabular-nums text-muted-foreground">{m.prev}</td>
+										<td class="p-2 font-bold tabular-nums text-foreground">{m.curr}</td>
+										<td class="p-2">
+											<span
+												class={[
+													'rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums',
+													m.isPositive ? 'bg-emerald-500/15 text-emerald-700' : 'bg-amber-500/15 text-amber-700'
+												]}
+											>
+												{m.delta}
+											</span>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<p class="mt-3 text-sm font-medium text-foreground">{progressVerdict(prev, curr)}</p>
+				{/if}
 			</div>
 
 			<button
