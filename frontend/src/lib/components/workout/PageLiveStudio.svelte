@@ -472,8 +472,10 @@
 
 		<button
 			onclick={handleStartStop}
+			disabled={!workout.isSetRunning && !calibration.isCalibrated}
+			title={!workout.isSetRunning && !calibration.isCalibrated ? 'ปรับเทียบเซนเซอร์ของ session นี้ก่อน' : undefined}
 			class={[
-				'flex items-center gap-2 rounded-xl px-7 py-3 text-lg font-bold transition-all',
+				'flex items-center gap-2 rounded-xl px-7 py-3 text-lg font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50',
 				workout.isSetRunning
 					? 'bg-destructive text-white shadow-lg shadow-destructive/30'
 					: 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400'
@@ -528,7 +530,7 @@
 		>
 			<span class="flex items-center gap-2">
 				<WarningCircle size={18} weight="fill" />
-				ยังไม่ได้ปรับเทียบเซนเซอร์ % แรงกล้ามเนื้อจะคำนวณจากค่ามาตรฐาน ไม่ใช่ของคุณ
+				ต้องปรับเทียบเซนเซอร์ของ session นี้ให้ครบก่อน จึงจะเริ่มเซตได้
 			</span>
 			<button onclick={onGoCalibrate} class="rounded-md border border-amber-600/50 px-3 py-1 font-semibold hover:bg-amber-500/20">
 				ไปปรับเทียบ

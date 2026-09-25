@@ -3,11 +3,9 @@ import type { PageServerLoad } from './$types';
 import type { UserProfile } from '$lib/workout/user.svelte';
 import type { components } from '$lib/api/paths/fastapi';
 import {
-	DEFAULT_MVC_UV,
 	groupSetsIntoSessions,
 	thaiDate,
 	thaiShortDate,
-	uvToMvcPercent,
 	type SetResult,
 	type WorkoutSession
 } from '$lib/workout/metrics';
@@ -62,11 +60,7 @@ function mostFrequent(values: string[]): string {
 	return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
-function buildDashboardProfile(
-	user: ApiUser,
-	setsDescRaw: SetResult[],
-	emgMvcUv: number
-): UserProfile {
+function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserProfile {
 	const setsDesc = setsDescRaw.map((s) => ({ ...s, reps: s.reps ?? [] }));
 	const sets = [...setsDesc].reverse(); // chronological ascending
 	// Sets grouped by session_id -- "sessions" everywhere below means whole workouts,
@@ -85,9 +79,8 @@ function buildDashboardProfile(
 			? Math.round(Math.max(...sets.map((s) => s.weightKg * s.cleanReps)))
 			: 0,
 		longestTutSec: sets.length ? Math.max(...sets.map((s) => s.highTensionTutSeconds)) : 0,
-		peakEmgPercent: allReps.length
-			? uvToMvcPercent(Math.max(...allReps.map((r) => r.peakEmg)), emgMvcUv)
-			: 0,
+		// Each session's own calibration, so this compares effort not raw signal level.
+		peakEmgPercent: sessions.length ? Math.max(...sessions.map((s) => s.peakEmgPercent)) : 0,
 		bestRomDeg: allReps.length ? Math.round(Math.max(...allReps.map((r) => r.rom))) : 0,
 		lowestCheatPercent: cheatPercents.length ? Math.round(Math.min(...cheatPercents) * 10) / 10 : 0
 	};
@@ -107,7 +100,7 @@ function buildDashboardProfile(
 		session: thaiShortDate(s.startedAt),
 		purity: s.purityPercent,
 		rom: s.avgRomDeg,
-		emgPercent: uvToMvcPercent(s.peakEmgUv, emgMvcUv)
+		emgPercent: s.peakEmgPercent
 	}));
 
 	const historyLogs = [...sessions]
@@ -152,12 +145,9 @@ export const load: PageServerLoad = async (event) => {
 		throw error(401, 'Not authenticated');
 	}
 
-	const [{ data: sets }, { data: calibration }] = await Promise.all([
-		event.locals.fastapiClient.GET('/v1/sessions', { params: { query: { limit: 200 } } }),
-		event.locals.fastapiClient.GET('/v1/calibration')
-	]);
+	const { data: sets } = await event.locals.fastapiClient.GET('/v1/sessions', {
+		params: { query: { limit: 200 } }
+	});
 
-	return {
-		user: buildDashboardProfile(apiUser, sets ?? [], calibration?.emgMvc ?? DEFAULT_MVC_UV)
-	};
+	return { user: buildDashboardProfile(apiUser, sets ?? []) };
 };

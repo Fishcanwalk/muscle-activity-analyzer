@@ -1,10 +1,8 @@
 import fastapiClient from '$lib/api/fastapi-client';
 import {
-	DEFAULT_MVC_UV,
 	groupSetsIntoSessions,
 	thaiDate,
 	thaiShortDate,
-	uvToMvcPercent,
 	type SetResult,
 	type WorkoutSession
 } from './metrics';
@@ -23,7 +21,7 @@ export interface SessionTrendPoint {
 	weight: number;
 	cleanReps: number;
 	purity: number;
-	/** % of the user's calibrated MVC, not the raw µV the sensor/backend use internally. */
+	/** % of each session's own calibrated MVC, not the raw µV the sensor/backend use. */
 	sEmgRms: number;
 	rom: number;
 	cleanVolume: number;
@@ -61,7 +59,6 @@ function metric(
 class HistoryManager {
 	status = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
 	sets = $state.raw<SetResult[]>([]);
-	emgMvcUv = $state(DEFAULT_MVC_UV);
 
 	exerciseFilter = $state<string>('all');
 	range = $state<HistoryRange>('last5');
@@ -89,7 +86,7 @@ class HistoryManager {
 			weight: s.maxWeightKg,
 			cleanReps: s.cleanReps,
 			purity: s.purityPercent,
-			sEmgRms: uvToMvcPercent(s.peakEmgUv, this.emgMvcUv),
+			sEmgRms: s.peakEmgPercent,
 			rom: s.avgRomDeg,
 			cleanVolume: s.cleanVolumeKg
 		}))
@@ -101,8 +98,6 @@ class HistoryManager {
 		if (n < 2) return null;
 		const prev = this.sessions[n - 2];
 		const curr = this.sessions[n - 1];
-		const prevEmg = uvToMvcPercent(prev.peakEmgUv, this.emgMvcUv);
-		const currEmg = uvToMvcPercent(curr.peakEmgUv, this.emgMvcUv);
 		return {
 			previousDate: thaiDate(prev.startedAt),
 			currentDate: thaiDate(curr.startedAt),
@@ -120,7 +115,7 @@ class HistoryManager {
 					1
 				),
 				metric('Average ROM (องศาข้อศอก)', prev.avgRomDeg, curr.avgRomDeg, '°'),
-				metric('ออกแรงกล้ามเนื้อสูงสุด', prevEmg, currEmg, '%'),
+				metric('ออกแรงกล้ามเนื้อสูงสุด (% MVC)', prev.peakEmgPercent, curr.peakEmgPercent, '%'),
 				metric(
 					'High-Tension TUT',
 					prev.highTensionTutSeconds,
@@ -169,16 +164,14 @@ class HistoryManager {
 	async load() {
 		this.status = 'loading';
 		try {
-			const [setsRes, calRes] = await Promise.all([
-				fastapiClient.GET('/v1/sessions', { params: { query: { limit: 200 } } }),
-				fastapiClient.GET('/v1/calibration')
-			]);
+			const setsRes = await fastapiClient.GET('/v1/sessions', {
+				params: { query: { limit: 200 } }
+			});
 			if (setsRes.error || !setsRes.data) {
 				this.status = 'error';
 				return;
 			}
 			this.sets = setsRes.data;
-			this.emgMvcUv = calRes.data?.emgMvc ?? DEFAULT_MVC_UV;
 			this.status = 'ready';
 		} catch {
 			// Network failure (openapi-fetch throws rather than returning `error`).

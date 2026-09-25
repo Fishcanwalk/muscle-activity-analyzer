@@ -15,7 +15,6 @@
 	let msgTimer: ReturnType<typeof setTimeout> | null = null;
 
 	onMount(() => {
-		calibration.loadFromServer();
 		return () => {
 			if (msgTimer) clearTimeout(msgTimer);
 		};
@@ -36,6 +35,9 @@
 		fsrZero: 'จุดไม่มีแรงกด',
 		fsrMax: 'แรงบีบสูงสุด'
 	};
+	let remaining = $derived(
+		(Object.keys(STEP_LABELS) as CalibrationStep[]).filter((step) => !calibration.stepDone[step])
+	);
 
 	async function runCapture(step: CalibrationStep) {
 		const result = await calibration.capture(step);
@@ -77,13 +79,14 @@
 				ขั้นที่ 1 · ปรับเทียบเซนเซอร์
 			</h2>
 			<p class="text-sm text-muted-foreground">
-				ปรับเทียบค่าเริ่มต้น (Zero & MVC) ของเซ็นเซอร์แต่ละตัว เพื่อความแม่นยำสูงสุดตามสรีระผู้ใช้
+				ปรับเทียบค่าเริ่มต้น (Zero & MVC) ของเซ็นเซอร์แต่ละตัวใหม่ทุก session เพราะตำแหน่งเซนเซอร์และสภาพกล้ามเนื้อเปลี่ยนทุกครั้ง
 			</p>
 		</div>
 
 		<button
 			onclick={onProceed}
-			disabled={calibration.capturing !== null}
+			disabled={calibration.capturing !== null || !calibration.isCalibrated}
+			title={calibration.isCalibrated ? undefined : `ยังต้องวัด: ${remaining.map((s) => STEP_LABELS[s]).join(', ')}`}
 			class={[
 				'flex items-center gap-2 rounded-lg px-5 py-2.5 font-bold transition-all disabled:opacity-50',
 				calibration.isCalibrated
@@ -91,7 +94,9 @@
 					: 'border border-border bg-card text-muted-foreground hover:text-foreground'
 			]}
 		>
-			<span>{calibration.isCalibrated ? 'ถัดไป: ตรวจความพร้อม' : 'ข้ามไปก่อน'}</span>
+			<span>
+				{calibration.isCalibrated ? 'ถัดไป: ตรวจความพร้อม' : `วัดให้ครบก่อน (เหลือ ${remaining.length} จุด)`}
+			</span>
 			<ArrowRight class="h-4 w-4" />
 		</button>
 	</div>
@@ -115,8 +120,8 @@
 		>
 			<Info class="mt-0.5 h-4 w-4 shrink-0" />
 			<span>
-				ใช้งานครั้งแรก: ติดเซนเซอร์ให้เรียบร้อยแล้ววัดค่าทีละจุดตามลำดับ (จุดพัก → ออกแรงสูงสุด → ไม่มีแรงกด →
-				แรงบีบสูงสุด) ค่าจะถูกบันทึกกับบัญชีของคุณ ครั้งต่อไปไม่ต้องทำซ้ำเว้นแต่เปลี่ยนตำแหน่งเซนเซอร์
+				ต้องปรับเทียบทุกครั้งก่อนเริ่ม session: ติดเซนเซอร์ให้เรียบร้อยแล้ววัดค่าให้ครบทั้ง 4 จุดตามลำดับ (จุดพัก →
+				ออกแรงสูงสุด → ไม่มีแรงกด → แรงบีบสูงสุด) ระบบจะไม่ใช้ค่าจาก session ก่อน และจะเริ่มเซตได้เมื่อวัดครบแล้ว
 			</span>
 		</div>
 	{/if}

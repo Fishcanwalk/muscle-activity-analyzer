@@ -7,23 +7,19 @@
 	import PageCalibration from './PageCalibration.svelte';
 	import { onMount } from 'svelte';
 	import { workout } from '$lib/workout/workout.svelte';
-	import { calibration as calibrationStore } from '$lib/workout/calibration.svelte';
-	import type { CalibrationValues } from '$lib/workout/metrics';
+	import { calibration } from '$lib/workout/calibration.svelte';
 
 	interface Props {
 		user: { name?: string; email: string; avatar?: string | null; [key: string]: unknown };
-		/** The user's saved calibration from GET /v1/calibration (null if the fetch failed). */
-		calibration: CalibrationValues | null;
-		isCalibrated: boolean;
 	}
 
-	let { user, calibration, isCalibrated }: Props = $props();
+	let { user }: Props = $props();
 
 	// Client-only: `workout`/`calibration` are module singletons, which during SSR
 	// would be shared across every request, so they're only seeded after mount.
 	onMount(() => {
-		if (calibration) calibrationStore.apply(calibration);
-		workout.initTab(isCalibrated);
+		calibration.restoreOrStartFresh();
+		workout.initTab();
 	});
 </script>
 
@@ -51,7 +47,7 @@
 				onFinishSession={() => (workout.activeTab = 'analytics')}
 			/>
 		{:else if workout.activeTab === 'analytics'}
-			<PageAnalytics onStartNewWorkout={() => (workout.activeTab = 'readiness')} />
+			<PageAnalytics onStartNewWorkout={() => (workout.activeTab = 'calibration')} />
 		{:else if workout.activeTab === 'calibration'}
 			<PageCalibration onProceed={() => (workout.activeTab = 'readiness')} />
 		{/if}

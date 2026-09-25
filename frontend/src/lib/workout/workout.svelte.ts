@@ -1,5 +1,6 @@
 import fastapiClient from '$lib/api/fastapi-client';
 import { toast } from 'svelte-sonner';
+import { DEFAULT_MVC_UV } from './metrics';
 
 export interface RepRecord {
 	repNumber: number;
@@ -35,6 +36,8 @@ export interface SetSummary {
 	timestamp: string;
 	sessionId: string | null;
 	repSource: RepSource;
+	/** This session's calibrated MVC (µV), so the set's peakEmg can be read as % MVC later. */
+	emgMvcUv: number;
 	/** Client-side identity, used to track which sets saveSummary() already persisted. */
 	localId: string;
 }
@@ -87,6 +90,11 @@ class WorkoutManager {
 	setsInSession = $state<SetSummary[]>([]);
 	repSource = $state<RepSource>('camera');
 
+	// Pushed by calibration.svelte.ts (see its syncWorkout): whether every sensor was
+	// calibrated for this session, and the MVC measured.
+	calibrationReady = $state(false);
+	emgMvcUv = $state(DEFAULT_MVC_UV);
+
 	private timerInterval: any = null;
 	private tabInitialized = false;
 	// localIds of sets already POSTed. Tracked here rather than as a flag on the set:
@@ -112,14 +120,17 @@ class WorkoutManager {
 
 	// Picks the tab Live Studio opens on, once per page load (later visits keep
 	// whatever tab the lifter was on): back to the studio if a workout is already in
-	// progress (sessionId survives a reload via sessionStorage), calibration if this
-	// user has never calibrated, otherwise the pre-workout readiness check.
-	initTab(isCalibrated: boolean) {
+	// progress (sessionId survives a reload via sessionStorage), otherwise calibration,
+	// which every new session starts with.
+	initTab() {
 		if (this.tabInitialized) return;
 		this.tabInitialized = true;
-		if (this.isSetRunning || this.sessionId) this.activeTab = 'studio';
-		else if (!isCalibrated) this.activeTab = 'calibration';
-		else this.activeTab = 'readiness';
+		this.activeTab = this.isSetRunning || this.sessionId ? 'studio' : 'calibration';
+	}
+
+	setCalibrationState(ready: boolean, emgMvcUv: number) {
+		this.calibrationReady = ready;
+		this.emgMvcUv = emgMvcUv;
 	}
 
 	// Locked while a set is running so a set's reps all come from one source.
@@ -144,7 +155,13 @@ class WorkoutManager {
 		});
 	}
 
-	startSet() {
+	/** Returns false (and sends the lifter to calibration) if this session isn't calibrated. */
+	startSet(): boolean {
+		if (!this.calibrationReady) {
+			toast.warning('ต้องปรับเทียบเซนเซอร์ของ session นี้ให้ครบก่อนเริ่มเซต');
+			this.activeTab = 'calibration';
+			return false;
+		}
 		if (this.timerInterval) clearInterval(this.timerInterval);
 
 		if (!this.sessionId) {
@@ -173,6 +190,7 @@ class WorkoutManager {
 		}, 1000);
 
 		this.postRecordingAction('start');
+		return true;
 	}
 
 	stopSet() {
@@ -195,6 +213,7 @@ class WorkoutManager {
 			timestamp: new Date().toLocaleTimeString(),
 			sessionId: this.sessionId,
 			repSource: this.repSource,
+			emgMvcUv: this.emgMvcUv,
 			localId: newId()
 		};
 		this.lastCompletedSet = completedSet;
@@ -322,7 +341,8 @@ class WorkoutManager {
 			reps: summary.reps,
 			timestamp: summary.timestamp,
 			session_id: summary.sessionId,
-			repSource: summary.repSource
+			repSource: summary.repSource,
+			emgMvcUv: summary.emgMvcUv
 		};
 
 		const { error } = await fastapiClient.POST('/v1/sessions', { body });
@@ -380,10 +400,8 @@ class WorkoutManager {
 			} else if (this.activeTab === 'postset') {
 				if (this.lastCompletedSet) await this.saveSummary(this.lastCompletedSet, { silent: true });
 				this.nextSet();
-				this.startSet();
-				this.activeTab = 'studio';
-			} else {
-				this.startSet();
+				if (this.startSet()) this.activeTab = 'studio';
+			} else if (this.startSet()) {
 				this.activeTab = 'studio';
 			}
 			return;

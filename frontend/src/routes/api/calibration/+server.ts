@@ -22,7 +22,8 @@ function parseCalibrationCreate(body: unknown): Partial<CalibrationCreate> | nul
 	return parsed;
 }
 
-// Authenticated proxy to backend `/v1/calibration` (per-user, persisted in Mongo).
+// Authenticated proxy to backend `/v1/calibration` (per-user, persisted in Mongo as a
+// record of the latest calibration -- the app itself never reads it back, see DELETE).
 // The old unauthenticated write straight to the shared telemetryStore singleton has
 // been removed entirely -- no fallback (per the plan's decision 3: keeping that path
 // would let it silently stomp a real user's calibration). Every successful GET/POST
@@ -81,4 +82,13 @@ export const POST: RequestHandler = async (event) => {
 
 	serverTelemetry.setCalibration(data);
 	return json({ success: true, updated: data });
+};
+
+// A new workout session is starting: calibration must be redone, so the live conversion
+// goes back to defaults instead of the previous session's values. Only the in-memory
+// cache is reset; the backend record is left alone.
+export const DELETE: RequestHandler = async (event) => {
+	await resolveUser(event);
+	serverTelemetry.resetCalibration();
+	return json({ success: true, calibration: serverTelemetry.state.calibration });
 };

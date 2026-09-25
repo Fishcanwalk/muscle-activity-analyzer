@@ -1,7 +1,35 @@
 import { telemetry } from './telemetry.svelte';
-import { DEFAULT_CALIBRATION, isDefaultCalibration, type CalibrationValues } from './metrics';
+import { workout } from './workout.svelte';
+import { DEFAULT_CALIBRATION, type CalibrationValues } from './metrics';
 
 export type CalibrationStep = 'emgZero' | 'emgMvc' | 'fsrZero' | 'fsrMax';
+
+// Calibration belongs to one workout session: it starts from defaults every session and
+// is never loaded back from the backend. It's kept in sessionStorage only so a page
+// reload mid-session doesn't force the lifter to redo it; startFresh() clears it.
+const STORAGE_KEY = 'workout.calibration';
+const NOT_CAPTURED: Record<CalibrationStep, boolean> = {
+	emgZero: false,
+	emgMvc: false,
+	fsrZero: false,
+	fsrMax: false
+};
+
+interface StoredCalibration {
+	values: CalibrationValues;
+	captured: Record<CalibrationStep, boolean>;
+}
+
+function readStored(): StoredCalibration | null {
+	try {
+		const raw = sessionStorage.getItem(STORAGE_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as StoredCalibration;
+		return parsed?.values && parsed?.captured ? parsed : null;
+	} catch {
+		return null;
+	}
+}
 
 const CAPTURE_SAMPLE_MS = 100;
 // Rest readings are averaged over a short window; max-effort readings get longer so
@@ -41,45 +69,83 @@ class CalibrationManager {
 	capturing = $state<CalibrationStep | null>(null);
 	captureSecondsLeft = $state(0);
 
-	// A step counts as done once its value differs from the backend default, i.e. it
-	// has been measured (now or in an earlier visit) and saved.
-	stepDone = $derived({
-		emgZero: this.emgZeroOffsetUv !== DEFAULT_CALIBRATION.emgBaseline,
-		emgMvc: this.emgMvcPeakUv !== DEFAULT_CALIBRATION.emgMvc,
-		fsrZero: this.fsrZeroAdc !== DEFAULT_CALIBRATION.fsrZero,
-		fsrMax: this.fsrMaxGripAdc !== DEFAULT_CALIBRATION.fsrMax
-	} satisfies Record<CalibrationStep, boolean>);
+	/** Steps measured during this session. */
+	stepDone = $state<Record<CalibrationStep, boolean>>({ ...NOT_CAPTURED });
 
 	// %MVC only means something once MVC itself has been measured.
 	canCountWithEmg = $derived(this.stepDone.emgMvc);
 
-	isCalibrated = $derived(
-		!isDefaultCalibration({
+	/** Every step measured this session -- required before the session's first set. */
+	isCalibrated = $derived(Object.values(this.stepDone).every(Boolean));
+
+	private get values(): CalibrationValues {
+		return {
 			emgBaseline: this.emgZeroOffsetUv,
 			emgMvc: this.emgMvcPeakUv,
 			fsrZero: this.fsrZeroAdc,
-			fsrMax: this.fsrMaxGripAdc
-		})
-	);
+			fsrMax: this.fsrMaxGripAdc,
+			emgRepOnPct: this.emgRepOnPct,
+			emgRepOffPct: this.emgRepOffPct,
+			emgRepPeakPct: this.emgRepPeakPct
+		};
+	}
 
-	apply(cal: CalibrationValues) {
+	private applyValues(cal: CalibrationValues) {
 		this.emgZeroOffsetUv = cal.emgBaseline;
 		this.emgMvcPeakUv = cal.emgMvc;
 		this.fsrZeroAdc = cal.fsrZero;
 		this.fsrMaxGripAdc = cal.fsrMax;
-		this.emgRepOnPct = cal.emgRepOnPct ?? DEFAULT_CALIBRATION.emgRepOnPct;
-		this.emgRepOffPct = cal.emgRepOffPct ?? DEFAULT_CALIBRATION.emgRepOffPct;
-		this.emgRepPeakPct = cal.emgRepPeakPct ?? DEFAULT_CALIBRATION.emgRepPeakPct;
+		this.emgRepOnPct = cal.emgRepOnPct;
+		this.emgRepOffPct = cal.emgRepOffPct;
+		this.emgRepPeakPct = cal.emgRepPeakPct;
 	}
 
-	async loadFromServer() {
+	// workout.svelte.ts can't import this module (it would be an import cycle through
+	// telemetry.svelte.ts), so the state startSet() checks is pushed to it instead.
+	private syncWorkout() {
+		workout.setCalibrationState(this.isCalibrated, this.emgMvcPeakUv);
+	}
+
+	private persist() {
 		try {
-			const res = await fetch('/api/calibration');
-			if (!res.ok) return;
-			const { calibration: cal } = await res.json();
-			if (cal) this.apply(cal);
+			sessionStorage.setItem(
+				STORAGE_KEY,
+				JSON.stringify({ values: this.values, captured: this.stepDone } satisfies StoredCalibration)
+			);
 		} catch {
-			// Keep the current values if the server can't be reached.
+			// Storage unavailable -- a reload will just ask for calibration again.
+		}
+		this.syncWorkout();
+	}
+
+	/** On page load: keep this session's calibration if the page was only reloaded. */
+	restoreOrStartFresh() {
+		const stored = readStored();
+		if (!stored) {
+			void this.startFresh();
+			return;
+		}
+		this.applyValues(stored.values);
+		this.stepDone = { ...NOT_CAPTURED, ...stored.captured };
+		this.syncWorkout();
+		// The server's live copy may have been reset (restart, another session) since.
+		void this.postCurrentCalibration();
+	}
+
+	/** A new session: forget every value and make the server's live copy default again. */
+	async startFresh() {
+		this.applyValues(DEFAULT_CALIBRATION);
+		this.stepDone = { ...NOT_CAPTURED };
+		try {
+			sessionStorage.removeItem(STORAGE_KEY);
+		} catch {
+			// Nothing stored then.
+		}
+		this.syncWorkout();
+		try {
+			await fetch('/api/calibration', { method: 'DELETE' });
+		} catch {
+			// Server unreachable -- the next capture POST overwrites its copy anyway.
 		}
 	}
 
@@ -88,15 +154,7 @@ class CalibrationManager {
 			const res = await fetch('/api/calibration', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					emgBaseline: this.emgZeroOffsetUv,
-					emgMvc: this.emgMvcPeakUv,
-					fsrZero: this.fsrZeroAdc,
-					fsrMax: this.fsrMaxGripAdc,
-					emgRepOnPct: this.emgRepOnPct,
-					emgRepOffPct: this.emgRepOffPct,
-					emgRepPeakPct: this.emgRepPeakPct
-				})
+				body: JSON.stringify(this.values)
 			});
 			return res.ok;
 		} catch {
@@ -124,8 +182,9 @@ class CalibrationManager {
 		}
 	}
 
-	// Samples the live sensor stream for CAPTURE_DURATION_MS[step], then saves the
-	// result (mean for rest readings, peak for max-effort readings) to the backend.
+	// Samples the live sensor stream for CAPTURE_DURATION_MS[step], then stores the result
+	// (mean for rest readings, peak for max-effort readings) for this session and sends
+	// it to the server, whose live conversion and rep detector use it.
 	async capture(step: CalibrationStep): Promise<CaptureResult> {
 		if (this.capturing) return { ok: false, error: 'กำลังวัดค่าอื่นอยู่' };
 
@@ -177,6 +236,8 @@ class CalibrationManager {
 				this.fsrMaxGripAdc = value;
 				break;
 		}
+		this.stepDone[step] = true;
+		this.persist();
 
 		const saved = await this.postCurrentCalibration();
 		return saved
@@ -198,6 +259,7 @@ class CalibrationManager {
 	async saveRepThresholds(): Promise<CaptureResult> {
 		const invalid = this.validateRepThresholds();
 		if (invalid) return { ok: false, error: invalid };
+		this.persist();
 		const saved = await this.postCurrentCalibration();
 		return saved
 			? { ok: true, value: this.emgRepOnPct }

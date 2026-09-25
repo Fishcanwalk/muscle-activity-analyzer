@@ -5,8 +5,4 @@
 	let { data }: PageProps = $props();
 </script>
 
-<WorkoutDashboard
-	user={data.user}
-	calibration={data.calibration}
-	isCalibrated={data.isCalibrated}
-/>
+<WorkoutDashboard user={data.user} />

@@ -2,7 +2,12 @@ import { EventEmitter } from 'node:events';
 import { env } from '$env/dynamic/private';
 import { logger } from '$lib/logger';
 import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
-import { EmgRepDetector, type EmgRepEvent, type EmgRepState } from './emgRepDetector';
+import {
+	DEFAULT_EMG_REP_CONFIG,
+	EmgRepDetector,
+	type EmgRepEvent,
+	type EmgRepState
+} from './emgRepDetector';
 
 export interface EmgPacket {
 	raw?: number | number[];
@@ -316,14 +321,11 @@ class ServerTelemetryState {
 		this.forwardToBackend();
 	}
 
-	// NOTE: the backend `/v1/calibration` collection (per-user) is now the source of
-	// truth for calibration values -- see src/routes/api/calibration/+server.ts, which
-	// proxies GET/POST through `event.locals.fastapiClient`. This in-memory copy is no
-	// longer directly writable from an unauthenticated caller; it's kept only as a live
-	// cache so the always-on ADC->µV/N conversion above (ingestEmg/ingestFullTelemetry)
-	// and the SSE `state` snapshot stay in sync with whatever the calibration route last
-	// read/wrote for the current single-rig user. The calibration route calls this after
-	// every successful backend GET/POST to refresh the cache.
+	// NOTE: calibration is redone at the start of every workout session and never loaded
+	// back from the backend. This in-memory copy is what the always-on ADC->µV/N
+	// conversion above (ingestEmg/ingestFullTelemetry), the rep detector and the SSE
+	// `state` snapshot use; src/routes/api/calibration/+server.ts sets it after each
+	// capture (POST) and puts it back to defaults when a new session starts (DELETE).
 	setCalibration(cal: {
 		emgBaseline?: number;
 		emgMvc?: number;
@@ -347,6 +349,18 @@ class ServerTelemetryState {
 			peakPct: c.emgRepPeakPct
 		});
 		this.broadcast('calibration', this.state.calibration);
+	}
+
+	resetCalibration() {
+		this.setCalibration({
+			emgBaseline: 0,
+			emgMvc: 550.0,
+			fsrZero: 0.0,
+			fsrMax: ADC_MAX,
+			emgRepOnPct: DEFAULT_EMG_REP_CONFIG.onPct,
+			emgRepOffPct: DEFAULT_EMG_REP_CONFIG.offPct,
+			emgRepPeakPct: DEFAULT_EMG_REP_CONFIG.peakPct
+		});
 	}
 
 	// Idempotent restart: re-issuing `start` for the same user just refreshes startedAt.

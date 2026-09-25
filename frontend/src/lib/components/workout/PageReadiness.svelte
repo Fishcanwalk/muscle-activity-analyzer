@@ -107,7 +107,7 @@
 		>
 			<span class="flex items-center gap-2 font-semibold">
 				<AlertTriangle class="h-4 w-4" />
-				ยังไม่ได้ปรับเทียบเซนเซอร์ ค่าแรงบีบและ % การออกแรงอาจไม่แม่นยำ
+				ยังไม่ได้ปรับเทียบเซนเซอร์ของ session นี้ ต้องปรับเทียบก่อนจึงจะเริ่มเซตได้
 			</span>
 			<button
 				onclick={onGoCalibrate}
