@@ -27,6 +27,8 @@ class SessionResultCreate(BaseModel):
     reps: list[RepResult] = Field(default_factory=list)
     timestamp: str | None = None
     session_id: str | None = None
+    # How reps were counted for this set: "camera", "emg" or "hybrid".
+    repSource: str | None = None
 
 
 class SessionResult(SessionResultCreate):
@@ -53,4 +55,5 @@ def session_doc_to_model(doc: dict) -> SessionResult:
         reps=doc.get("reps", []),
         timestamp=doc.get("timestamp"),
         session_id=doc.get("session_id"),
+        repSource=doc.get("repSource"),
     )
