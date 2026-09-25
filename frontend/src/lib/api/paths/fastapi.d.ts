@@ -106,6 +106,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users
+         * @description Everyone else the caller can compare themselves with, most recently active first.
+         */
+        get: operations["list_users_v1_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/users/{user_id}/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Performance
+         * @description Any user's saved sets (the caller's own included) for the user-vs-user comparison.
+         *
+         *     Not limited by the plan's history window, so both sides are compared over the same span.
+         */
+        get: operations["get_user_performance_v1_users__user_id__performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/telemetry": {
         parameters: {
             query?: never;
@@ -142,6 +184,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{session_id}/comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare With Previous Session
+         * @description The given session next to the same user's previous one (by start time).
+         *
+         *     Deliberately not limited by the plan's history window: the post-workout comparison
+         *     must always find the previous session, however long ago it was.
+         */
+        get: operations["compare_with_previous_session_v1_sessions__session_id__comparison_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/calibration": {
         parameters: {
             query?: never;
@@ -154,6 +219,129 @@ export interface paths {
         put?: never;
         /** Upsert Calibration */
         post: operations["upsert_calibration_v1_calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Billing Config */
+        get: operations["get_billing_config_v1_billing_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Billing Overview */
+        get: operations["get_billing_overview_v1_billing_subscription_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Checkout */
+        post: operations["checkout_v1_billing_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Subscription
+         * @description Re-check a pending (3-D Secure) charge -- used when returning from the bank page,
+         *     and the only way it completes in local dev where Omise webhooks can't reach us.
+         */
+        post: operations["refresh_subscription_v1_billing_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Subscription */
+        post: operations["cancel_subscription_v1_billing_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Subscription */
+        post: operations["resume_subscription_v1_billing_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/webhooks/omise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Omise Webhook */
+        post: operations["omise_webhook_v1_billing_webhooks_omise_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -181,6 +369,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BillingConfig */
+        BillingConfig: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "disabled" | "mock" | "omise";
+            /** Omisepublickey */
+            omisePublicKey?: string | null;
+            /** Plans */
+            plans: components["schemas"]["Plan"][];
+        };
+        /** BillingOverview */
+        BillingOverview: {
+            plan: components["schemas"]["Plan"];
+            subscription: components["schemas"]["Subscription"] | null;
+        };
         /** Calibration */
         Calibration: {
             /** Emgbaseline */
@@ -239,6 +444,19 @@ export interface components {
              * @default 45
              */
             emgRepPeakPct: number;
+        };
+        /** CheckoutRequest */
+        CheckoutRequest: {
+            /** Planid */
+            planId: string;
+            /** Cardtoken */
+            cardToken?: string | null;
+        };
+        /** CheckoutResponse */
+        CheckoutResponse: {
+            subscription: components["schemas"]["Subscription"];
+            /** Authorizeuri */
+            authorizeUri?: string | null;
         };
         /** DeviceState */
         DeviceState: {
@@ -307,6 +525,46 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** Plan */
+        Plan: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Pricesatang */
+            priceSatang: number;
+            /** Currency */
+            currency: string;
+            /** Interval */
+            interval: string;
+            features: components["schemas"]["PlanFeatures"];
+        };
+        /** PlanFeatures */
+        PlanFeatures: {
+            /** Historydays */
+            historyDays: number | null;
+        };
+        /** PublicUser */
+        PublicUser: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Avatar */
+            avatar?: string | null;
+            /**
+             * Sessioncount
+             * @default 0
+             */
+            sessionCount: number;
+            /**
+             * Setcount
+             * @default 0
+             */
+            setCount: number;
+            /** Lastworkoutat */
+            lastWorkoutAt?: string | null;
+        };
         /** RepResult */
         RepResult: {
             /** Repnumber */
@@ -323,6 +581,13 @@ export interface components {
             peakEmg: number;
             /** Cheatreason */
             cheatReason?: string | null;
+        };
+        /** SessionComparison */
+        SessionComparison: {
+            /** Current */
+            current: components["schemas"]["SessionResult"][];
+            /** Previous */
+            previous: components["schemas"]["SessionResult"][];
         };
         /** SessionResult */
         SessionResult: {
@@ -354,6 +619,8 @@ export interface components {
             session_id?: string | null;
             /** Repsource */
             repSource?: string | null;
+            /** Emgmvcuv */
+            emgMvcUv?: number | null;
             /** Id */
             id: string;
             /** User Id */
@@ -394,6 +661,31 @@ export interface components {
             session_id?: string | null;
             /** Repsource */
             repSource?: string | null;
+            /** Emgmvcuv */
+            emgMvcUv?: number | null;
+        };
+        /** Subscription */
+        Subscription: {
+            /** Planid */
+            planId: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "incomplete" | "active" | "past_due" | "canceled";
+            /** Provider */
+            provider: string;
+            /** Currentperiodstart */
+            currentPeriodStart?: string | null;
+            /** Currentperiodend */
+            currentPeriodEnd?: string | null;
+            /**
+             * Cancelatperiodend
+             * @default false
+             */
+            cancelAtPeriodEnd: boolean;
+            /** Lasterror */
+            lastError?: string | null;
         };
         /** TelemetryIngest */
         TelemetryIngest: {
@@ -474,6 +766,12 @@ export interface components {
              * @default false
              */
             remember_me: boolean;
+        };
+        /** UserPerformance */
+        UserPerformance: {
+            user: components["schemas"]["PublicUser"];
+            /** Sets */
+            sets: components["schemas"]["SessionResult"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -654,6 +952,59 @@ export interface operations {
             };
         };
     };
+    list_users_v1_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicUser"][];
+                };
+            };
+        };
+    };
+    get_user_performance_v1_users__user_id__performance_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPerformance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_telemetry_history_v1_telemetry_get: {
         parameters: {
             query?: {
@@ -790,6 +1141,37 @@ export interface operations {
             };
         };
     };
+    compare_with_previous_session_v1_sessions__session_id__comparison_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionComparison"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_calibration_v1_calibration_get: {
         parameters: {
             query?: never;
@@ -839,6 +1221,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_billing_config_v1_billing_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingConfig"];
+                };
+            };
+        };
+    };
+    get_billing_overview_v1_billing_subscription_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOverview"];
+                };
+            };
+        };
+    };
+    checkout_v1_billing_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_subscription_v1_billing_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOverview"];
+                };
+            };
+        };
+    };
+    cancel_subscription_v1_billing_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOverview"];
+                };
+            };
+        };
+    };
+    resume_subscription_v1_billing_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOverview"];
+                };
+            };
+        };
+    };
+    omise_webhook_v1_billing_webhooks_omise_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
