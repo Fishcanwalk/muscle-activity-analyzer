@@ -20,6 +20,7 @@ async def create_indexes() -> None:
     await database.session_results.create_index([("user_id", 1), ("created_at", -1)])
     await database.session_results.create_index("session_id")
     await database.calibrations.create_index("user_id", unique=True)
+    await database.grip_tests.create_index([("user_id", 1), ("created_at", -1)])
     await database.telemetry_samples.create_index([("user_id", 1), ("received_at", -1)])
     await database.subscriptions.create_index("user_id", unique=True)
     await database.subscriptions.create_index("omise_customer_id", sparse=True)

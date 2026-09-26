@@ -16,7 +16,10 @@ class EmgState(BaseModel):
 class FsrState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    # Newtons from older frontends; grip is now reported as gripPercent instead.
     gripForce: float | None = None
+    # % of the session's calibrated max squeeze.
+    gripPercent: float | None = None
     gripStability: float | None = None
     isStable: bool | None = None
 
