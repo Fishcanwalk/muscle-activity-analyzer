@@ -1,14 +1,23 @@
+import fastapiClient from '$lib/api/fastapi-client';
 import { telemetry } from './telemetry.svelte';
 
 const TEST_SECONDS = 5;
+const SAMPLE_MS = 100;
+// Below this many ADC counts above "no grip" the FSR didn't register a squeeze.
+const MIN_GRIP_SPAN_ADC = 50;
 
+// Pre-workout grip test. Today's peak is compared with the user's own recent tests
+// (POST /v1/readiness/grip), in raw ADC counts above "no grip" -- not with this
+// session's calibrated max squeeze, which was just measured and would always read ~100%.
 class ReadinessManager {
 	isTesting = $state(false);
 	countdownSeconds = $state(TEST_SECONDS);
-	currentGripKg = $state(0);
-	peakGripKg = $state(0);
-	baselineGripKg = $state(50.0);
-	/** null until a grip test has finished with a usable reading. */
+	/** % of this session's calibrated max squeeze, for the live display. */
+	currentGripPercent = $state(0);
+	peakGripPercent = $state(0);
+	/** How many earlier tests the comparison used; null until a test finished. */
+	previousTests = $state<number | null>(null);
+	/** Today's peak as % of the user's normal grip; null until there's a baseline. */
 	cnsReadinessPercent = $state<number | null>(null);
 
 	// 0 means "no reading yet" -- the page shows a dash instead of a made-up number.
@@ -29,57 +38,72 @@ class ReadinessManager {
 		if (this.testInterval) clearInterval(this.testInterval);
 		this.isTesting = true;
 		this.countdownSeconds = TEST_SECONDS;
-		this.peakGripKg = 0;
-		this.currentGripKg = 0;
+		this.peakGripPercent = 0;
+		this.currentGripPercent = 0;
 		this.isComplete = false;
 
-		let secondsLeft = TEST_SECONDS;
-		let highestGrip = 0;
+		const startedAt = Date.now();
+		let peakSpanAdc = 0;
 
 		this.testInterval = setInterval(() => {
-			secondsLeft -= 1;
-			// Sample real hardware FSR reading (1 kg ≈ 9.8 N)
-			const realGripForce = telemetry.fsr.gripForce;
-			const measuredKg = Number((realGripForce > 0 ? realGripForce / 9.8 : 0).toFixed(1));
-			if (measuredKg > highestGrip) highestGrip = measuredKg;
+			const spanAdc = telemetry.fsr.rawAdc - telemetry.serverCalibration.fsrZero;
+			if (spanAdc > peakSpanAdc) peakSpanAdc = spanAdc;
+			this.currentGripPercent = Math.round(telemetry.fsr.gripPercent);
+			this.peakGripPercent = Math.max(this.peakGripPercent, this.currentGripPercent);
 
-			this.countdownSeconds = secondsLeft;
-			this.currentGripKg = measuredKg;
-			this.peakGripKg = highestGrip;
+			const elapsed = Date.now() - startedAt;
+			this.countdownSeconds = Math.max(0, Math.ceil((TEST_SECONDS * 1000 - elapsed) / 1000));
+			if (elapsed < TEST_SECONDS * 1000) return;
 
-			if (secondsLeft <= 0) {
-				if (this.testInterval) clearInterval(this.testInterval);
-				this.testInterval = null;
-				this.isTesting = false;
-				this.currentGripKg = highestGrip;
+			if (this.testInterval) clearInterval(this.testInterval);
+			this.testInterval = null;
+			this.isTesting = false;
+			this.currentGripPercent = this.peakGripPercent;
+			void this.finishTest(peakSpanAdc);
+		}, SAMPLE_MS);
+	}
 
-				if (highestGrip <= 0) {
-					this.statusLabel = 'ไม่พบแรงบีบ';
-					this.recommendation =
-						'ไม่ได้รับค่าจากเซนเซอร์แรงบีบ (FSR) ตรวจสอบการเชื่อมต่อหรือปรับเทียบเซนเซอร์ แล้วทดสอบใหม่';
-					return;
-				}
+	private async finishTest(peakSpanAdc: number) {
+		if (peakSpanAdc < MIN_GRIP_SPAN_ADC) {
+			this.statusLabel = 'ไม่พบแรงบีบ';
+			this.recommendation =
+				'ไม่ได้รับค่าจากเซนเซอร์แรงบีบ (FSR) ตรวจสอบการเชื่อมต่อหรือปรับเทียบเซนเซอร์ แล้วทดสอบใหม่';
+			return;
+		}
 
-				const readinessPct = Math.round((highestGrip / this.baselineGripKg) * 100);
-				let status = 'Optimal Readiness';
-				let rec = 'ระบบประสาทฟื้นตัวดีเยี่ยม พร้อมฝึกเต็มศักยภาพ';
+		const { data, error } = await fastapiClient
+			.POST('/v1/readiness/grip', { body: { peakSpanAdc } })
+			.catch(() => ({ data: undefined, error: true }));
+		if (error || !data) {
+			this.statusLabel = 'บันทึกผลไม่สำเร็จ';
+			this.recommendation = 'ส่งผลทดสอบไปยังเซิร์ฟเวอร์ไม่สำเร็จ ลองทดสอบใหม่อีกครั้ง';
+			return;
+		}
 
-				if (readinessPct < 85) {
-					status = 'High Fatigue / Deload';
-					rec =
-						'ตรวจพบความล้าสะสมของระบบประสาท (CNS Fatigue) แนะนำลด Volume ลง 20% หรือเลือก RIR 3-4';
-				} else if (readinessPct < 92) {
-					status = 'Moderate Fatigue';
-					rec = 'ความพร้อมปานกลาง แนะนำให้รักษาความหนักเท่าเดิม ไม่ควรฝืนเร่งน้ำหนักในวันนี้';
-				}
+		this.isComplete = true;
+		this.previousTests = data.previousTests;
+		const readinessPct = data.readinessPercent ?? null;
+		this.cnsReadinessPercent = readinessPct;
+		if (readinessPct === null) {
+			this.overallScore = null;
+			this.statusLabel = 'บันทึกค่าอ้างอิงแล้ว';
+			this.recommendation =
+				'นี่คือการทดสอบครั้งแรกของคุณ ระบบบันทึกแรงบีบนี้เป็นค่าปกติ ครั้งต่อไปจะนำมาเทียบเพื่อประเมินความล้า';
+			return;
+		}
 
-				this.isComplete = true;
-				this.cnsReadinessPercent = readinessPct;
-				this.overallScore = Math.min(100, readinessPct);
-				this.statusLabel = status;
-				this.recommendation = rec;
-			}
-		}, 1000);
+		let status = 'Optimal Readiness';
+		let rec = 'ระบบประสาทฟื้นตัวดีเยี่ยม พร้อมฝึกเต็มศักยภาพ';
+		if (readinessPct < 85) {
+			status = 'High Fatigue / Deload';
+			rec = 'ตรวจพบความล้าสะสมของระบบประสาท (CNS Fatigue) แนะนำลด Volume ลง 20% หรือเลือก RIR 3-4';
+		} else if (readinessPct < 92) {
+			status = 'Moderate Fatigue';
+			rec = 'ความพร้อมปานกลาง แนะนำให้รักษาความหนักเท่าเดิม ไม่ควรฝืนเร่งน้ำหนักในวันนี้';
+		}
+		this.overallScore = Math.min(100, readinessPct);
+		this.statusLabel = status;
+		this.recommendation = rec;
 	}
 
 	resetTest() {
@@ -87,8 +111,8 @@ class ReadinessManager {
 		this.testInterval = null;
 		this.isTesting = false;
 		this.countdownSeconds = TEST_SECONDS;
-		this.currentGripKg = 0;
-		this.peakGripKg = 0;
+		this.currentGripPercent = 0;
+		this.peakGripPercent = 0;
 		this.isComplete = false;
 	}
 }

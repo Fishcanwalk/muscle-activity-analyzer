@@ -9,7 +9,7 @@ export interface RecordingSample {
 	timestamp: number;
 	emgRms: number;
 	emgMvcPercent: number;
-	fsrGripForceN: number;
+	fsrGripPercent: number;
 	fsrGripStabilityPercent: number;
 	mpuConcentricVelocity: number;
 	mpuVelocityLossPercent: number;
@@ -65,7 +65,7 @@ class RecordingManager {
 			timestamp: now,
 			emgRms: telemetry.emg.rms,
 			emgMvcPercent: telemetry.emg.mvcPercent,
-			fsrGripForceN: telemetry.fsr.gripForce,
+			fsrGripPercent: telemetry.fsr.gripPercent,
 			fsrGripStabilityPercent: telemetry.fsr.gripStabilityPercent,
 			mpuConcentricVelocity: telemetry.mpu.concentricVelocity,
 			mpuVelocityLossPercent: telemetry.mpu.velocityLossPercent,

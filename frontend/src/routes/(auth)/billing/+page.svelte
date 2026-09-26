@@ -31,7 +31,7 @@
 		plan.features.historyDays === null
 			? 'ดูประวัติการฝึกย้อนหลังได้ทั้งหมด'
 			: `ดูประวัติการฝึกย้อนหลัง ${plan.features.historyDays} วัน`,
-		'นับครั้งด้วยกล้อง / EMG / Hybrid'
+		'นับ rep และตรวจท่าโกงจากคลื่นกล้ามเนื้อ (EMG)'
 	];
 
 	let statusLine = $derived.by(() => {

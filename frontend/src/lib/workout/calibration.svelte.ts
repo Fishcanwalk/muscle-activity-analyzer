@@ -67,8 +67,11 @@ class CalibrationManager {
 	emgRepOffPct = $state(DEFAULT_CALIBRATION.emgRepOffPct);
 	emgRepPeakPct = $state(DEFAULT_CALIBRATION.emgRepPeakPct);
 
-	torsoAngleLimitDeg = $state(8.0);
-	shoulderHikeLimitCm = $state(3.0);
+
+	constructor() {
+		// Every workout ends with a fresh calibration for the next one (board button B).
+		workout.onWorkoutEnded(() => void this.startFresh());
+	}
 
 	capturing = $state<CalibrationStep | null>(null);
 	captureSecondsLeft = $state(0);
@@ -114,7 +117,10 @@ class CalibrationManager {
 		try {
 			sessionStorage.setItem(
 				STORAGE_KEY,
-				JSON.stringify({ values: this.values, captured: this.stepDone } satisfies StoredCalibration)
+				JSON.stringify({
+					values: this.values,
+					captured: this.stepDone
+				} satisfies StoredCalibration)
 			);
 		} catch {
 			// Storage unavailable -- a reload will just ask for calibration again.
@@ -271,14 +277,6 @@ class CalibrationManager {
 		return saved
 			? { ok: true, value: this.emgRepOnPct }
 			: { ok: false, error: 'บันทึกเกณฑ์ไปยังเซิร์ฟเวอร์ไม่สำเร็จ' };
-	}
-
-	setTorsoLimit(deg: number) {
-		this.torsoAngleLimitDeg = Number(deg);
-	}
-
-	setShoulderLimit(cm: number) {
-		this.shoulderHikeLimitCm = Number(cm);
 	}
 }
 

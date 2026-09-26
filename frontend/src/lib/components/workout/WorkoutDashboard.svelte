@@ -23,24 +23,27 @@
 	});
 </script>
 
-<div class="flex min-h-screen flex-col bg-background text-foreground">
+<!-- Live Studio is laid out to fit one screen (lg and up), so on that tab the page is
+     exactly viewport-tall and <main> gets the height left under the header. -->
+<div
+	class={[
+		'flex min-h-screen flex-col bg-background text-foreground',
+		workout.activeTab === 'studio' && 'lg:h-dvh lg:min-h-0'
+	]}
+>
 	<WorkoutHeader
 		activeTab={workout.activeTab}
 		onTabChange={(tab) => (workout.activeTab = tab)}
 		{user}
 	/>
 
-	<main class="flex-1 pb-10">
+	<main
+		class={['flex-1', workout.activeTab === 'studio' ? 'lg:min-h-0 lg:overflow-y-auto' : 'pb-10']}
+	>
 		{#if workout.activeTab === 'readiness'}
-			<PageReadiness
-				onProceed={() => (workout.activeTab = 'studio')}
-				onGoCalibrate={() => (workout.activeTab = 'calibration')}
-			/>
+			<PageReadiness onGoCalibrate={() => (workout.activeTab = 'calibration')} />
 		{:else if workout.activeTab === 'studio'}
-			<PageLiveStudio
-				onFinishSet={() => (workout.activeTab = 'postset')}
-				onGoCalibrate={() => (workout.activeTab = 'calibration')}
-			/>
+			<PageLiveStudio onGoCalibrate={() => (workout.activeTab = 'calibration')} />
 		{:else if workout.activeTab === 'postset'}
 			<PagePostSet
 				onStartNextSet={() => (workout.activeTab = 'studio')}
@@ -53,4 +56,3 @@
 		{/if}
 	</main>
 </div>
-

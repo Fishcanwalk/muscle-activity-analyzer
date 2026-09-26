@@ -1,16 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { workout, type SessionSummary } from '$lib/workout/workout.svelte';
+	import { workout } from '$lib/workout/workout.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
-	import { calibration } from '$lib/workout/calibration.svelte';
-	import {
-		compareSessions,
-		groupSetsIntoSessions,
-		progressVerdict,
-		thaiDate,
-		type WorkoutSession
-	} from '$lib/workout/metrics';
-	import fastapiClient from '$lib/api/fastapi-client';
+	import { compareSessions, progressVerdict, thaiDate } from '$lib/workout/metrics';
 	import { formatDec } from '$lib/utils/format';
 	import { Timer, ArrowRight, CheckCircle2, AlertTriangle, Flag } from 'lucide-svelte';
 
@@ -66,64 +58,13 @@
 		if (restTimer) clearInterval(restTimer);
 	});
 
-	// Two actions only, both of which now actually persist data (previously a
-	// separate "บันทึกผลเซสชันวันนี้" button was the only thing that saved to the
-	// backend, so a lifter who forgot to click it before ending lost that set):
-	// starting the next set silently saves the one that just finished, and ending
-	// the workout saves whatever hasn't been saved yet before aggregating.
-	let isBusy = $state(false);
-
-	async function handleNextSet() {
-		if (!currentSummary) return;
-		isBusy = true;
-		await workout.saveSummary(currentSummary, { silent: true });
-		isBusy = false;
-		workout.nextSet();
-		onStartNextSet();
-	}
-
-	// Renders the session-wide numbers in place (rather than immediately switching
-	// tabs) so the lifter sees them before moving on -- see handleCloseSummary.
-	let sessionSummary = $state<SessionSummary | null>(null);
-
-	// The session that just ended next to this user's previous one, from the backend
-	// (GET /v1/sessions/{id}/comparison only ever looks at the caller's own sets).
-	type Comparison =
-		| { status: 'loading' | 'error' | 'first' }
-		| { status: 'ready'; prev: WorkoutSession; curr: WorkoutSession };
-	let comparison = $state<Comparison | null>(null);
-
-	async function loadComparison(sessionId: string) {
-		comparison = { status: 'loading' };
-		try {
-			const { data, error } = await fastapiClient.GET('/v1/sessions/{session_id}/comparison', {
-				params: { path: { session_id: sessionId } }
-			});
-			if (error || !data) {
-				comparison = { status: 'error' };
-				return;
-			}
-			const [curr] = groupSetsIntoSessions(data.current);
-			const [prev] = groupSetsIntoSessions(data.previous);
-			comparison = prev ? { status: 'ready', prev, curr } : { status: 'first' };
-		} catch {
-			comparison = { status: 'error' };
-		}
-	}
-
-	async function handleEndWorkout() {
-		isBusy = true;
-		await workout.saveAllPendingSets();
-		sessionSummary = workout.endWorkout();
-		isBusy = false;
-		// The next session has to calibrate again from scratch.
-		void calibration.startFresh();
-		if (sessionSummary.sessionId) void loadComparison(sessionSummary.sessionId);
-	}
+	// Next set / end workout come from the board's buttons (workout.handleRemoteButton);
+	// the session summary and comparison are filled in by workout.finishWorkout().
+	let sessionSummary = $derived(workout.sessionSummary);
+	let comparison = $derived(workout.comparison);
 
 	function handleCloseSummary() {
-		sessionSummary = null;
-		comparison = null;
+		workout.clearSessionSummary();
 		onFinishSession();
 	}
 </script>
@@ -258,23 +199,20 @@
 			</p>
 		</div>
 
-		<div class="flex flex-wrap gap-3">
-			<button
-				onclick={handleNextSet}
-				disabled={isBusy}
-				class="flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 disabled:opacity-50"
-			>
-				<span>{isBusy ? 'กำลังบันทึก...' : `เริ่มเซตถัดไป (Set #${currentSummary.setNumber + 1})`}</span>
-				<ArrowRight class="h-4 w-4" />
-			</button>
-			<button
-				onclick={handleEndWorkout}
-				disabled={isBusy}
-				class="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 font-semibold text-rose-600 hover:bg-rose-500/20 disabled:opacity-50"
-			>
-				<Flag class="h-4 w-4" />
-				<span>{isBusy ? 'กำลังบันทึก...' : 'บันทึกผลและจบการออกกำลังกาย'}</span>
-			</button>
+		<div class="flex flex-col gap-2 text-sm">
+			{#if workout.isFinishing}
+				<span class="font-semibold text-foreground">กำลังบันทึกผลการออกกำลังกาย...</span>
+			{:else}
+				<span class="flex items-center gap-2 font-semibold text-foreground">
+					<kbd class="rounded-md bg-emerald-500 px-2 py-0.5 font-bold text-black">A</kbd>
+					เริ่มเซตถัดไป (Set #{currentSummary.setNumber + 1})
+				</span>
+				<span class="flex items-center gap-2 font-semibold text-foreground">
+					<kbd class="rounded-md bg-rose-500 px-2 py-0.5 font-bold text-white">B</kbd>
+					บันทึกผลและจบการออกกำลังกาย
+				</span>
+				<span class="text-xs text-muted-foreground">กดปุ่มบนบอร์ด</span>
+			{/if}
 		</div>
 	</div>
 
@@ -375,7 +313,6 @@
 								<th class="py-2 font-medium">ครั้งที่</th>
 								<th class="font-medium">ความเร็ว</th>
 								<th class="font-medium">ช้าลง</th>
-								<th class="font-medium">ROM</th>
 								<th class="font-medium">ท่า</th>
 							</tr>
 						</thead>
@@ -393,7 +330,6 @@
 											{r.velocityLossPercent}%
 										</span>
 									</td>
-									<td>{r.rom}°</td>
 									<td>
 										{#if r.isClean}
 											<span class="rounded bg-emerald-500/20 px-1.5 py-0.5 font-bold text-emerald-600">
@@ -454,7 +390,7 @@
 	<div class="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-10 text-center shadow-md">
 		<h3 class="text-lg font-bold text-foreground">ยังไม่มีเซตที่จบในการออกกำลังกายนี้</h3>
 		<p class="max-w-md text-sm text-muted-foreground">
-			เริ่มเซตที่ Live Studio แล้วกด "จบเซต" สรุปผลของเซตนั้นจะแสดงที่นี่
+			กดปุ่ม A บนบอร์ดเพื่อเริ่มเซต แล้วกด A อีกครั้งเพื่อจบเซต สรุปผลของเซตนั้นจะแสดงที่นี่
 		</p>
 		<button
 			onclick={onStartNextSet}

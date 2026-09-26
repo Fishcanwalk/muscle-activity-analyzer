@@ -2,14 +2,13 @@
 	import { readiness } from '$lib/workout/readiness.svelte';
 	import { calibration } from '$lib/workout/calibration.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
-	import { Heart, Droplets, Thermometer, CheckCircle2, XCircle, Circle, Zap, ArrowRight, AlertTriangle } from 'lucide-svelte';
+	import { Heart, Droplets, Thermometer, CheckCircle2, XCircle, Circle, Zap, AlertTriangle } from 'lucide-svelte';
 
 	interface Props {
-		onProceed: () => void;
 		onGoCalibrate: () => void;
 	}
 
-	let { onProceed, onGoCalibrate }: Props = $props();
+	let { onGoCalibrate }: Props = $props();
 
 	const fmt = (n: number, suffix = '') => (n > 0 ? `${n}${suffix}` : '–');
 
@@ -87,18 +86,21 @@
 				ตรวจเช็กความพร้อมของระบบประสาทส่วนกลาง (Central Nervous System) และสัญญาณชีพก่อนเริ่มยกเวท
 			</p>
 		</div>
-		<button
-			onclick={onProceed}
+		<!-- The first set starts only from here, with the board's button (workout.handleRemoteButton). -->
+		<div
 			class={[
-				'flex items-center gap-2 rounded-lg px-5 py-2.5 font-bold transition-all',
-				readiness.isComplete
-					? 'bg-linear-to-r from-emerald-500 to-emerald-600 text-black shadow-lg shadow-emerald-500/20 hover:translate-y-[-1px] hover:shadow-emerald-500/30'
-					: 'border border-border bg-card text-muted-foreground hover:text-foreground'
+				'flex items-center gap-3 rounded-lg border px-4 py-2.5',
+				calibration.isCalibrated ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-border bg-card opacity-60'
 			]}
 		>
-			<span>{readiness.isComplete ? 'ถัดไป: เริ่มฝึกที่ Live Studio' : 'ข้ามการทดสอบ ไปที่ Live Studio'}</span>
-			<ArrowRight class="h-4 w-4" />
-		</button>
+			<kbd class="rounded-md bg-emerald-500 px-2.5 py-1 text-lg font-bold text-black">A</kbd>
+			<span class="text-sm">
+				<span class="block font-bold text-foreground">กดปุ่ม A บนบอร์ดเพื่อเริ่มเซตแรก</span>
+				<span class="text-muted-foreground">
+					{readiness.isComplete ? 'ทดสอบความพร้อมแล้ว' : 'ทดสอบแรงบีบก่อนได้ (ไม่บังคับ)'} · ระบบจะพาไปหน้า Live Studio
+				</span>
+			</span>
+		</div>
 	</div>
 
 	{#if !calibration.isCalibrated}
@@ -162,7 +164,8 @@
 					ทดสอบแรงบีบมือ
 				</h3>
 				<p class="mt-2 text-sm text-muted-foreground leading-relaxed">
-					บีบเซนเซอร์ที่มือจับเต็มแรง 5 วินาที ถ้าแรงบีบต่ำกว่าปกติเกิน 10–15% แปลว่าร่างกายยังไม่ฟื้นตัวเต็มที่
+					บีบเซนเซอร์ที่มือจับเต็มแรง 5 วินาที ระบบเทียบกับแรงบีบของคุณในการทดสอบครั้งก่อน ๆ ถ้าต่ำกว่าปกติเกิน 10–15%
+					แปลว่าร่างกายยังไม่ฟื้นตัวเต็มที่ (% ด้านล่างเทียบกับแรงบีบสูงสุดที่ปรับเทียบไว้ใน session นี้)
 				</p>
 
 				<div class="mt-4 rounded-lg border border-border bg-background/50 p-4">
@@ -170,19 +173,19 @@
 						<div>
 							<span class="text-xs text-muted-foreground">แรงบีบปัจจุบัน</span>
 							<div class="text-xl font-black text-foreground">
-								{readiness.currentGripKg} <span class="text-xs font-normal text-muted-foreground">kg</span>
+								{readiness.currentGripPercent}<span class="text-xs font-normal text-muted-foreground">%</span>
 							</div>
 						</div>
 						<div>
 							<span class="text-xs text-muted-foreground">Peak สูงสุดวันนี้</span>
 							<div class="text-xl font-black text-emerald-600">
-								{readiness.peakGripKg} <span class="text-xs font-normal text-muted-foreground">kg</span>
+								{readiness.peakGripPercent}<span class="text-xs font-normal text-muted-foreground">%</span>
 							</div>
 						</div>
 						<div>
-							<span class="text-xs text-muted-foreground">Baseline ปกติ</span>
+							<span class="text-xs text-muted-foreground">เทียบกับปกติของคุณ</span>
 							<div class="text-xl font-black text-muted-foreground">
-								{readiness.baselineGripKg} <span class="text-xs font-normal text-muted-foreground">kg</span>
+								{readiness.cnsReadinessPercent === null ? '–' : `${readiness.cnsReadinessPercent}%`}
 							</div>
 						</div>
 					</div>
@@ -190,7 +193,7 @@
 					<div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-border">
 						<div
 							class="h-full bg-linear-to-r from-cyan-500 to-emerald-400 transition-all duration-200"
-							style="width: {Math.min(100, (readiness.currentGripKg / readiness.baselineGripKg) * 100)}%;"
+							style="width: {Math.min(100, readiness.currentGripPercent)}%;"
 						></div>
 					</div>
 

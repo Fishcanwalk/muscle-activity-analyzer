@@ -1,6 +1,6 @@
 import fastapiClient from '$lib/api/fastapi-client';
 import { toast } from 'svelte-sonner';
-import { DEFAULT_MVC_UV } from './metrics';
+import { DEFAULT_MVC_UV, groupSetsIntoSessions, type WorkoutSession } from './metrics';
 
 export interface RepRecord {
 	repNumber: number;
@@ -13,13 +13,13 @@ export interface RepRecord {
 }
 
 /**
- * What counts reps during a set:
- * - camera: MediaPipe elbow-angle FSM (telemetry.updateFromMediaPipe)
- * - emg: server-side sEMG envelope detector (src/lib/server/emgRepDetector.ts)
- * - hybrid: the camera counts, and the rep only counts as clean if the sEMG peak
- *   during it reached the "real effort" threshold (catches momentum reps)
+ * Reps are always counted by the server-side sEMG envelope detector
+ * (src/lib/server/emgRepDetector.ts). The camera only flags cheats, which are pinned to
+ * the rep they happened in (see telemetry.svelte.ts onEmgRep). Older sets saved with
+ * 'camera' or 'hybrid' keep that value in the backend.
  */
-export type RepSource = 'camera' | 'emg' | 'hybrid';
+export type RepSource = 'emg';
+const REP_SOURCE: RepSource = 'emg';
 
 export interface SetSummary {
 	setNumber: number;
@@ -52,8 +52,12 @@ export interface SessionSummary {
 	avgFormPurityPercent: number;
 }
 
+/** The session that just ended next to this user's previous one (GET /v1/sessions/{id}/comparison). */
+export type SessionComparison =
+	| { status: 'loading' | 'error' | 'first' }
+	| { status: 'ready'; prev: WorkoutSession; curr: WorkoutSession };
+
 const SESSION_ID_STORAGE_KEY = 'workout.sessionId';
-const REP_SOURCE_STORAGE_KEY = 'workout.repSource';
 
 // crypto.randomUUID() only exists in secure contexts (https / localhost), but the
 // app is also opened over plain http on a LAN IP (see DEPLOYMENT.md).
@@ -81,14 +85,19 @@ class WorkoutManager {
 	formPurityPercent = $state(100);
 	fsmState = $state<'IDLE' | 'START' | 'INFLECTION' | 'PEAK' | 'COMPLETION'>('IDLE');
 	effectiveReps = $state(0);
-	activeCheatWarnings = $state<string[]>([]);
 	highTensionTutSeconds = $state(0);
 	repsInSet = $state<RepRecord[]>([]);
 	lastCompletedSet = $state<SetSummary | null>(null);
 
 	sessionId = $state<string | null>(null);
 	setsInSession = $state<SetSummary[]>([]);
-	repSource = $state<RepSource>('camera');
+
+	// Set by finishWorkout() (board button B) and shown on the post-set tab until the
+	// lifter closes it or starts the next session's first set.
+	sessionSummary = $state<SessionSummary | null>(null);
+	comparison = $state<SessionComparison | null>(null);
+	isFinishing = $state(false);
+	private workoutEndedListeners: (() => void)[] = [];
 
 	// Pushed by calibration.svelte.ts (see its syncWorkout): whether every sensor was
 	// calibrated for this session, and the MVC measured.
@@ -109,12 +118,6 @@ class WorkoutManager {
 		if (typeof window !== 'undefined') {
 			const stored = sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
 			if (stored) this.sessionId = stored;
-			try {
-				const source = localStorage.getItem(REP_SOURCE_STORAGE_KEY);
-				if (source === 'camera' || source === 'emg' || source === 'hybrid') this.repSource = source;
-			} catch {
-				// Storage unavailable (private mode etc.) -- keep the default.
-			}
 		}
 	}
 
@@ -131,17 +134,6 @@ class WorkoutManager {
 	setCalibrationState(ready: boolean, emgMvcUv: number) {
 		this.calibrationReady = ready;
 		this.emgMvcUv = emgMvcUv;
-	}
-
-	// Locked while a set is running so a set's reps all come from one source.
-	setRepSource(source: RepSource) {
-		if (this.isSetRunning) return;
-		this.repSource = source;
-		try {
-			localStorage.setItem(REP_SOURCE_STORAGE_KEY, source);
-		} catch {
-			// Storage unavailable -- the choice just won't survive a reload.
-		}
 	}
 
 	private postRecordingAction(action: 'start' | 'stop') {
@@ -180,7 +172,6 @@ class WorkoutManager {
 		this.fsmState = 'START';
 		this.effectiveReps = 0;
 		this.highTensionTutSeconds = 0;
-		this.activeCheatWarnings = [];
 		this.repsInSet = [];
 
 		this.timerInterval = setInterval(() => {
@@ -189,6 +180,8 @@ class WorkoutManager {
 			}
 		}, 1000);
 
+		this.sessionSummary = null;
+		this.comparison = null;
 		this.postRecordingAction('start');
 		return true;
 	}
@@ -212,7 +205,7 @@ class WorkoutManager {
 			reps: [...this.repsInSet],
 			timestamp: new Date().toLocaleTimeString(),
 			sessionId: this.sessionId,
-			repSource: this.repSource,
+			repSource: REP_SOURCE,
 			emgMvcUv: this.emgMvcUv,
 			localId: newId()
 		};
@@ -220,7 +213,6 @@ class WorkoutManager {
 		this.setsInSession = [...this.setsInSession, completedSet];
 		this.isSetRunning = false;
 		this.fsmState = 'IDLE';
-		this.activeCheatWarnings = [];
 
 		this.postRecordingAction('stop');
 		// Persist right away so the set survives even if the lifter never presses
@@ -259,6 +251,54 @@ class WorkoutManager {
 		return summary;
 	}
 
+	/** calibration.svelte.ts resets itself through this (it can't be imported from here). */
+	onWorkoutEnded(listener: () => void) {
+		this.workoutEndedListeners.push(listener);
+	}
+
+	// Stops the running set, saves every set of the workout, and shows the session
+	// summary plus the comparison with the previous session on the post-set tab.
+	async finishWorkout() {
+		if (this.isFinishing) return;
+		if (this.isSetRunning) this.stopSet();
+		if (this.setsInSession.length === 0) {
+			toast.warning('ยังไม่มีเซตให้บันทึก');
+			return;
+		}
+		this.isFinishing = true;
+		this.activeTab = 'postset';
+		await this.saveAllPendingSets();
+		const summary = this.endWorkout();
+		this.isFinishing = false;
+		this.sessionSummary = summary;
+		// The next session has to calibrate again from scratch.
+		for (const listener of this.workoutEndedListeners) listener();
+		if (summary.sessionId) void this.loadComparison(summary.sessionId);
+	}
+
+	clearSessionSummary() {
+		this.sessionSummary = null;
+		this.comparison = null;
+	}
+
+	private async loadComparison(sessionId: string) {
+		this.comparison = { status: 'loading' };
+		try {
+			const { data, error } = await fastapiClient.GET('/v1/sessions/{session_id}/comparison', {
+				params: { path: { session_id: sessionId } }
+			});
+			if (error || !data) {
+				this.comparison = { status: 'error' };
+				return;
+			}
+			const [curr] = groupSetsIntoSessions(data.current);
+			const [prev] = groupSetsIntoSessions(data.previous);
+			this.comparison = prev ? { status: 'ready', prev, curr } : { status: 'first' };
+		} catch {
+			this.comparison = { status: 'error' };
+		}
+	}
+
 	nextSet() {
 		this.currentSet += 1;
 		this.totalReps = 0;
@@ -268,7 +308,6 @@ class WorkoutManager {
 		this.fsmState = 'IDLE';
 		this.effectiveReps = 0;
 		this.highTensionTutSeconds = 0;
-		this.activeCheatWarnings = [];
 		this.repsInSet = [];
 	}
 
@@ -383,37 +422,38 @@ class WorkoutManager {
 		return { success: allOk };
 	}
 
-	// Driven by the ESP32's physical buttons (GPIO32/33) over the telemetry SSE
-	// channel -- see telemetry.svelte.ts's 'button' event listener. Mirrors the
-	// exact actions the on-screen buttons trigger (see PageLiveStudio/PagePostSet).
-	//
-	// Button A: a 3-press cycle -- start set -> stop set (go to summary) -> start
-	// the next set immediately (skipping the extra "เริ่มเซตถัดไป" click, but still
-	// saving the finished set the same way that click does).
-	// Button B: stop the current set (if running) and save it with a visible toast,
-	// the same save that "จบการออกกำลังกาย" now performs silently before ending.
+	// The board's two buttons are the only way to run a workout (the web pages have no
+	// start/stop buttons):
+	// Button A: start a set, or stop the running one (the summary opens on the post-set
+	// tab). A session's first set only starts from step 2 (Readiness), so calibration and
+	// the readiness check always come first. Starting after a finished set saves that set
+	// and moves to the next number.
+	// Button B: stop the running set and end the workout (finishWorkout).
 	async handleRemoteButton(id: 'a' | 'b') {
-		if (id === 'a') {
-			if (this.isSetRunning) {
-				this.stopSet();
-				this.activeTab = 'postset';
-			} else if (this.activeTab === 'postset') {
-				if (this.lastCompletedSet) await this.saveSummary(this.lastCompletedSet, { silent: true });
-				this.nextSet();
-				if (this.startSet()) this.activeTab = 'studio';
-			} else if (this.startSet()) {
-				this.activeTab = 'studio';
+		if (id === 'b') {
+			await this.finishWorkout();
+			return;
+		}
+		if (this.isSetRunning) {
+			this.stopSet();
+			this.activeTab = 'postset';
+			return;
+		}
+		if (!this.sessionId && this.activeTab !== 'readiness') {
+			if (!this.calibrationReady) {
+				toast.warning('ปรับเทียบเซนเซอร์ให้ครบก่อน แล้วเริ่มเซตแรกที่ขั้นที่ 2');
+				this.activeTab = 'calibration';
+			} else {
+				toast.info('เริ่มเซตแรกได้ที่ขั้นที่ 2 · กดปุ่ม A อีกครั้งเพื่อเริ่มเซต');
+				this.activeTab = 'readiness';
 			}
 			return;
 		}
-
-		if (this.isSetRunning) this.stopSet();
-		if (!this.lastCompletedSet) {
-			toast.warning('ยังไม่มีเซตให้บันทึก');
-			return;
+		if (this.lastCompletedSet && this.lastCompletedSet.setNumber === this.currentSet) {
+			await this.saveSummary(this.lastCompletedSet, { silent: true });
+			this.nextSet();
 		}
-		await this.saveSummary(this.lastCompletedSet);
-		this.activeTab = 'analytics';
+		if (this.startSet()) this.activeTab = 'studio';
 	}
 }
 

@@ -4,6 +4,13 @@ import { EMG_BUFFER_SIZE } from '$lib/telemetry-constants';
 
 export { round3, formatDec };
 
+// Which velocity samples belong to a rep (see onEmgRep). The emgRep event reaches the
+// browser up to one ESP32 batch (250 ms) plus network time after the rep ended, so a
+// rep's window opens this much earlier than its EMG duration alone would say.
+const REP_WINDOW_LEAD_MS = 750;
+// How much velocity history is kept; comfortably longer than any single rep.
+const VELOCITY_HISTORY_MS = 15_000;
+
 class TelemetryManager {
 	emg = $state({
 		rawBuffer: Array(EMG_BUFFER_SIZE).fill(0),
@@ -19,20 +26,20 @@ class TelemetryManager {
 	emgRepTestCount = $state(0);
 
 	mpu = $state({
+		/** Live vertical velocity (m/s). */
 		concentricVelocity: 0.0,
+		/** Peak concentric velocity of the latest rep, and of the set's first rep. */
+		lastRepVelocity: 0.0,
 		rep1Velocity: 0.0,
+		/** How much slower the latest rep was than the first one. */
 		velocityLossPercent: 0,
-		isEffectiveZone: false,
-		pitch: 0.0,
-		roll: 0.0,
-		ax: 0.0,
-		ay: 0.0,
-		az: 0.0
+		isEffectiveZone: false
 	});
 
 	fsr = $state({
 		rawAdc: 0,
-		gripForce: 0,
+		/** % of this session's calibrated max squeeze. */
+		gripPercent: 0,
 		gripStabilityPercent: 0,
 		isStable: false
 	});
@@ -45,15 +52,6 @@ class TelemetryManager {
 		peakHr: 0
 	});
 
-	cv = $state({
-		elbowAngle: 180,
-		torsoAngle: 0.0,
-		shoulderHikeCm: 0.0,
-		isTorsoCheating: false,
-		isShoulderCheating: false,
-		trackedArm: 'right' as 'right' | 'left',
-		fps: 0
-	});
 
 	sensors = $state({
 		emg: { lastSeen: 0 },
@@ -102,14 +100,11 @@ class TelemetryManager {
 	private reconnectDelayMs = 1000;
 	private readonly RECONNECT_MAX_DELAY_MS = 30000;
 
-	// Real camera FSM tracker
-	private hadPeakInCurrentRep = false;
-	private currentRepCheat: string | null = null;
-	private minElbowAngle = 180;
-	private maxElbowAngle = 0;
-	// Highest sEMG envelope seen since the last counted rep, whatever counted it.
-	private repEmgPeakPct = 0;
-	private repEmgPeakUv = 0;
+	// The board's per-batch peak velocity (timestamped with performance.now()), for each
+	// rep's peak over its own window.
+	private velocitySamples: { at: number; v: number }[] = [];
+	// When the previous rep was counted: a rep's window never reaches back past it.
+	private lastRepAt = 0;
 	private wasSetRunning = false;
 
 	constructor() {
@@ -152,8 +147,8 @@ class TelemetryManager {
 								this.sensors.vitals.lastSeen = data.sensors.vitals.lastSeen;
 						}
 
-						// A new set starts with clean per-rep trackers (no peak carried over from rest).
-						if (workout.isSetRunning && !this.wasSetRunning) this.resetRepTracking(this.cv.elbowAngle);
+						// A new set starts with an empty camera window, so nothing seen while resting counts.
+						if (workout.isSetRunning && !this.wasSetRunning) this.resetRepWindow();
 						this.wasSetRunning = workout.isSetRunning;
 
 						if (data.emg) {
@@ -165,20 +160,18 @@ class TelemetryManager {
 							if (data.emg.mvcPercent !== undefined)
 								this.emg.mvcPercent = round3(data.emg.mvcPercent);
 							this.emg.isHighTension = data.emg.isHighTension;
-							if (data.emg.windowPeakPct > this.repEmgPeakPct) this.repEmgPeakPct = data.emg.windowPeakPct;
-							if (data.emg.rms > this.repEmgPeakUv) this.repEmgPeakUv = data.emg.rms;
 						}
 
 						if (data.emgRep) {
 							this.emgRep = { state: data.emgRep.state, count: data.emgRep.count };
-							if (workout.isSetRunning && workout.repSource === 'emg') {
+							if (workout.isSetRunning) {
 								workout.fsmState = data.emgRep.state === 'CONTRACT' ? 'PEAK' : 'START';
 							}
 						}
 
 						if (data.fsr) {
 							if (data.fsr.rawAdc !== undefined) this.fsr.rawAdc = data.fsr.rawAdc;
-							if (data.fsr.gripForce !== undefined) this.fsr.gripForce = round3(data.fsr.gripForce);
+							if (data.fsr.gripPercent !== undefined) this.fsr.gripPercent = round3(data.fsr.gripPercent);
 							if (data.fsr.gripStability !== undefined)
 								this.fsr.gripStabilityPercent = round3(data.fsr.gripStability);
 							this.fsr.isStable = data.fsr.isStable;
@@ -187,23 +180,12 @@ class TelemetryManager {
 						if (data.mpu) {
 							if (data.mpu.velocity !== undefined) {
 								this.mpu.concentricVelocity = round3(data.mpu.velocity);
-								if (this.mpu.rep1Velocity === 0 && data.mpu.velocity > 0.1) {
-									this.mpu.rep1Velocity = this.mpu.concentricVelocity;
-								}
-								if (this.mpu.rep1Velocity > 0) {
-									this.mpu.velocityLossPercent = Math.max(
-										0,
-										Math.round((1 - this.mpu.concentricVelocity / this.mpu.rep1Velocity) * 100)
-									);
-								}
-								this.mpu.isEffectiveZone =
-									this.mpu.velocityLossPercent >= 25 && this.mpu.velocityLossPercent <= 45;
 							}
-							if (data.mpu.pitch !== undefined) this.mpu.pitch = round3(data.mpu.pitch);
-							if (data.mpu.roll !== undefined) this.mpu.roll = round3(data.mpu.roll);
-							if (data.mpu.ax !== undefined) this.mpu.ax = round3(data.mpu.ax);
-							if (data.mpu.ay !== undefined) this.mpu.ay = round3(data.mpu.ay);
-							if (data.mpu.az !== undefined) this.mpu.az = round3(data.mpu.az);
+							if (workout.isSetRunning && data.mpu.peakVelocity !== undefined) {
+								const now = performance.now();
+								this.velocitySamples.push({ at: now, v: data.mpu.peakVelocity });
+								this.velocitySamples = this.velocitySamples.filter((e) => e.at >= now - VELOCITY_HISTORY_MS);
+							}
 						}
 
 						if (data.vitals) {
@@ -262,33 +244,50 @@ class TelemetryManager {
 		}, delay);
 	}
 
-	// A rep from the server-side EMG detector. Only counts toward the set in 'emg' mode;
-	// in the other modes it's just shown (and counted on the calibration test panel).
+	// A rep from the server-side EMG detector, the only thing that counts or judges reps:
+	// a rep whose peak never reached the "real effort" threshold counts as a cheat. The
+	// camera is a plain preview for the lifter and feeds nothing in here.
 	private onEmgRep(rep: { peakPct: number; peakUv: number; durationMs: number; isStrong: boolean }) {
 		this.emgRepTestCount += 1;
-		if (!workout.isSetRunning || workout.repSource !== 'emg') return;
+		if (!workout.isSetRunning) return;
 
-		// If the camera happens to be on too, its anti-cheat flags still apply.
-		const cameraCheat = this.isWebcamActive ? this.currentRepCheat : null;
-		const cheatReason = cameraCheat ?? (rep.isStrong ? null : 'Low Activation (EMG)');
+		const now = performance.now();
+		const from = Math.max(this.lastRepAt, now - rep.durationMs - REP_WINDOW_LEAD_MS);
+		const cheatReason = rep.isStrong ? null : 'Low Activation (EMG)';
+
+		// Velocity-based training: this rep's peak lifting speed against the set's first rep.
+		const peakVelocity = Math.max(
+			0,
+			...this.velocitySamples.filter((e) => e.at >= from).map((e) => e.v)
+		);
+		if (this.mpu.rep1Velocity === 0 && peakVelocity > 0.05) this.mpu.rep1Velocity = round3(peakVelocity);
+		this.mpu.lastRepVelocity = round3(peakVelocity);
+		this.mpu.velocityLossPercent =
+			this.mpu.rep1Velocity > 0
+				? Math.max(0, Math.round((1 - peakVelocity / this.mpu.rep1Velocity) * 100))
+				: 0;
+		this.mpu.isEffectiveZone =
+			this.mpu.velocityLossPercent >= 25 && this.mpu.velocityLossPercent <= 45;
+
 		workout.recordRep({
 			isClean: cheatReason === null,
-			concentricVelocity: this.mpu.concentricVelocity,
-			rom: this.isWebcamActive ? Math.max(0, Math.round(this.maxElbowAngle - this.minElbowAngle)) : 0,
+			concentricVelocity: peakVelocity,
+			rom: 0, // no longer measured (the camera is preview-only); the backend still requires it
 			cheatReason,
 			peakEmg: rep.peakUv,
 			velocityLossPercent: this.mpu.velocityLossPercent
 		});
-		this.resetRepTracking(this.cv.elbowAngle);
+		this.lastRepAt = now;
 	}
 
-	private resetRepTracking(elbowAngle: number) {
-		this.hadPeakInCurrentRep = false;
-		this.currentRepCheat = null;
-		this.minElbowAngle = 180;
-		this.maxElbowAngle = elbowAngle;
-		this.repEmgPeakPct = 0;
-		this.repEmgPeakUv = 0;
+	private resetRepWindow() {
+		this.velocitySamples = [];
+		this.lastRepAt = performance.now();
+		// Velocity loss is measured within one set, from its first rep.
+		this.mpu.rep1Velocity = 0;
+		this.mpu.lastRepVelocity = 0;
+		this.mpu.velocityLossPercent = 0;
+		this.mpu.isEffectiveZone = false;
 	}
 
 	resetEmgRepTestCount() {
@@ -297,75 +296,6 @@ class TelemetryManager {
 
 	setWebcamActive(active: boolean) {
 		this.isWebcamActive = active;
-	}
-
-	setTrackedArm(arm: 'right' | 'left') {
-		this.cv.trackedArm = arm;
-	}
-
-	updateFromMediaPipe(data: {
-		elbowAngle: number;
-		torsoAngle: number;
-		shoulderHikeCm: number;
-		isTorsoCheating: boolean;
-		isShoulderCheating: boolean;
-		fps?: number;
-	}) {
-		if (workout.isSetRunning) {
-			if (data.elbowAngle > this.maxElbowAngle) this.maxElbowAngle = data.elbowAngle;
-			if (data.elbowAngle < this.minElbowAngle) this.minElbowAngle = data.elbowAngle;
-
-			if (data.isTorsoCheating) this.currentRepCheat = 'Torso Swing';
-			if (data.isShoulderCheating) this.currentRepCheat = 'Shoulder Hike';
-
-			const cheatWarnings: string[] = [];
-			if (data.isTorsoCheating) cheatWarnings.push('Torso Momentum Detected! (>8°)');
-			if (data.isShoulderCheating) cheatWarnings.push('Shoulder Hiking Detected! (>3cm)');
-			workout.activeCheatWarnings = cheatWarnings;
-
-			// Elbow-angle FSM -- counts reps in 'camera' and 'hybrid' mode. In 'emg' mode
-			// the EMG detector counts (onEmgRep) and the camera only supplies cheat flags/ROM.
-			const cameraCounts = workout.repSource !== 'emg';
-			if (data.elbowAngle >= 140) {
-				if (this.hadPeakInCurrentRep && cameraCounts) {
-					const rom = Math.max(50, Math.round(this.maxElbowAngle - this.minElbowAngle));
-					let cheatReason = this.currentRepCheat;
-					// Hybrid: the arm moved through a full rep, but if the muscle never reached
-					// the "real effort" threshold the weight was swung up, not curled.
-					if (
-						!cheatReason &&
-						workout.repSource === 'hybrid' &&
-						this.sensorStatus.emg === 'live' &&
-						this.repEmgPeakPct < this.serverCalibration.emgRepPeakPct
-					) {
-						cheatReason = 'Low Activation (EMG)';
-					}
-
-					workout.recordRep({
-						isClean: cheatReason === null,
-						concentricVelocity: this.mpu.concentricVelocity,
-						rom,
-						cheatReason,
-						peakEmg: this.repEmgPeakUv,
-						velocityLossPercent: this.mpu.velocityLossPercent
-					});
-					this.resetRepTracking(data.elbowAngle);
-				}
-				if (cameraCounts) workout.fsmState = 'START';
-			} else if (data.elbowAngle < 140 && data.elbowAngle > 70) {
-				if (cameraCounts) workout.fsmState = 'INFLECTION';
-			} else if (data.elbowAngle <= 70) {
-				if (cameraCounts) workout.fsmState = 'PEAK';
-				this.hadPeakInCurrentRep = true;
-			}
-		}
-
-		this.cv.elbowAngle = Math.round(data.elbowAngle);
-		this.cv.torsoAngle = Number(data.torsoAngle.toFixed(1));
-		this.cv.shoulderHikeCm = Number(data.shoulderHikeCm.toFixed(1));
-		this.cv.isTorsoCheating = data.isTorsoCheating;
-		this.cv.isShoulderCheating = data.isShoulderCheating;
-		if (data.fps) this.cv.fps = data.fps;
 	}
 }
 

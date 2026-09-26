@@ -3,6 +3,7 @@
 	import { calibration, type CalibrationStep } from '$lib/workout/calibration.svelte';
 	import { telemetry } from '$lib/workout/telemetry.svelte';
 	import { ArrowRight, Info } from 'lucide-svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onProceed: () => void;
@@ -19,6 +20,22 @@
 			if (msgTimer) clearTimeout(msgTimer);
 		};
 	});
+
+	// The board beeps 3 times on its next telemetry POST (within ~0.25 s) if it's online.
+	async function testBuzzer() {
+		try {
+			const res = await fetch('/api/buzzer-test', { method: 'POST' });
+			if (res.ok) {
+				toast.info('ส่งคำสั่งแล้ว: buzzer ควรดัง 3 ครั้ง', {
+					description: 'ถ้าไม่ดัง ตรวจสาย GPIO25 → ขา + ของ buzzer และขา − → GND'
+				});
+			} else {
+				toast.error('ส่งคำสั่งทดสอบ buzzer ไม่สำเร็จ');
+			}
+		} catch {
+			toast.error('ส่งคำสั่งทดสอบ buzzer ไม่สำเร็จ');
+		}
+	}
 
 	function flashMsg(msg: string, ok: boolean) {
 		calMsg = msg;
@@ -231,57 +248,19 @@
 			</div>
 		</div>
 
-		<!-- MediaPipe Sensitivity -->
-		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<h3 class="text-lg font-bold text-foreground">3. เกณฑ์ท่าโกงจากกล้อง</h3>
-			<p class="mt-2 text-sm text-muted-foreground leading-relaxed">
-				กำหนดเกณฑ์ความอ่อนไหวในการตัดคะแนนเมื่อตรวจพบการใช้แรงเหวี่ยงตัวหรือการยกไหล่ช่วย
-			</p>
-
-			<div class="mt-4 flex flex-col gap-4">
-				<div class="flex flex-col gap-1.5">
-					<div class="flex justify-between text-sm">
-						<span class="text-foreground">มุมเอนตัวสูงสุด</span>
-						<strong class="text-cyan-600">{calibration.torsoAngleLimitDeg}°</strong>
-					</div>
-					<input
-						type="range"
-						min="4"
-						max="15"
-						step="0.5"
-						value={calibration.torsoAngleLimitDeg}
-						oninput={(e: any) => calibration.setTorsoLimit(e.target.value)}
-						class="w-full accent-emerald-500 cursor-pointer"
-					/>
-					<span class="text-sm text-muted-foreground">
-						หากเอนตัวเกิน {calibration.torsoAngleLimitDeg}° ระบบจะตัดเป็น Cheated Rep ทันที
-					</span>
-				</div>
-
-				<div class="flex flex-col gap-1.5">
-					<div class="flex justify-between text-sm">
-						<span class="text-foreground">ระยะยกไหล่สูงสุด</span>
-						<strong class="text-cyan-600">{calibration.shoulderHikeLimitCm} cm</strong>
-					</div>
-					<input
-						type="range"
-						min="1"
-						max="6"
-						step="0.5"
-						value={calibration.shoulderHikeLimitCm}
-						oninput={(e: any) => calibration.setShoulderLimit(e.target.value)}
-						class="w-full accent-emerald-500 cursor-pointer"
-					/>
-					<span class="text-sm text-muted-foreground">
-						หากยกไหล่ขึ้นเกิน {calibration.shoulderHikeLimitCm} ซม. ระบบจะแจ้งเตือนให้กดไหล่ลง
-					</span>
-				</div>
-			</div>
-		</div>
-
 		<!-- Diagnostics Table -->
-		<div class="rounded-xl border border-border bg-card p-6 shadow-md">
-			<h3 class="text-lg font-bold text-foreground">4. สถานะอุปกรณ์</h3>
+		<div class="rounded-xl border border-border bg-card p-6 shadow-md md:col-span-2">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<h3 class="text-lg font-bold text-foreground">3. สถานะอุปกรณ์</h3>
+				<button
+					onclick={testBuzzer}
+					disabled={telemetry.sensorStatus.fsr !== 'live'}
+					title={telemetry.sensorStatus.fsr !== 'live' ? 'ยังไม่ได้รับข้อมูลจากบอร์ด' : undefined}
+					class="rounded-lg border border-cyan-500/50 bg-card px-3 py-1.5 text-sm font-semibold text-cyan-700 hover:bg-cyan-500/10 disabled:opacity-50"
+				>
+					ทดสอบ buzzer
+				</button>
+			</div>
 
 			<div class="mt-4 overflow-hidden rounded-lg border border-border">
 				<table class="w-full text-left text-sm">
@@ -340,9 +319,9 @@
 
 		<!-- EMG rep-counting thresholds -->
 		<div class="rounded-xl border border-border bg-card p-6 shadow-md md:col-span-2">
-			<h3 class="text-lg font-bold text-foreground">5. เกณฑ์นับ rep จากคลื่นกล้ามเนื้อ</h3>
+			<h3 class="text-lg font-bold text-foreground">4. เกณฑ์นับ rep จากคลื่นกล้ามเนื้อ</h3>
 			<p class="mt-2 text-sm leading-relaxed text-muted-foreground">
-				ใช้เมื่อเลือก "นับ rep จาก: EMG" หรือ "Hybrid" ในหน้า Live Studio ค่าทั้งหมดเป็น % ของแรงสูงสุด (MVC) ที่วัดไว้ด้านบน
+				ระบบนับ rep จากคลื่นกล้ามเนื้อเท่านั้น ค่าทั้งหมดเป็น % ของแรงสูงสุด (MVC) ที่วัดไว้ด้านบน
 				ระบบนับ 1 rep เมื่อสัญญาณขึ้นเกิน "เริ่มเกร็ง" แล้วลดลงต่ำกว่า "จบ rep" (ใช้เวลา 0.4–4 วินาที) rep ที่แรงสูงสุดไม่ถึง
 				"ออกแรงจริง" จะถูกนับเป็นท่าโกง (ใช้แรงเหวี่ยง)
 			</p>
