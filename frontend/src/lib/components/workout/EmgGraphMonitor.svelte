@@ -115,8 +115,6 @@
 			ctx.moveTo(left, y);
 			ctx.lineTo(width, y);
 			ctx.stroke();
-			ctx.fillStyle = t.color;
-			ctx.fillText(t.label, width - 120, y - 4);
 		}
 		ctx.setLineDash([]);
 
@@ -143,6 +141,28 @@
 			else ctx.lineTo(x, y);
 		}
 		ctx.stroke();
+
+		// Threshold labels as a legend in the top-right corner, drawn over the waveform:
+		// next to their lines they overlap each other (and the trace) on a short graph.
+		const rowH = 16;
+		const boxW = 116;
+		const boxX = width - boxW - 6;
+		ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+		ctx.fillRect(boxX, 6, boxW, thresholds.length * rowH + 6);
+		ctx.textAlign = 'left';
+		thresholds.forEach((t, i) => {
+			const y = 6 + rowH * (i + 1);
+			ctx.strokeStyle = t.color;
+			ctx.lineWidth = 1.5;
+			ctx.setLineDash(t.dash);
+			ctx.beginPath();
+			ctx.moveTo(boxX + 6, y - 4);
+			ctx.lineTo(boxX + 22, y - 4);
+			ctx.stroke();
+			ctx.fillStyle = t.color;
+			ctx.fillText(t.label, boxX + 28, y);
+		});
+		ctx.setLineDash([]);
 	}
 
 	function resetPeak() {
@@ -162,19 +182,19 @@
 	];
 
 	onMount(() => {
-		// Auto-resize canvas buffer to actual CSS pixels
-		if (canvasElement) {
-			canvasElement.width = canvasElement.parentElement?.clientWidth || 700;
-			canvasElement.height = 240;
-		}
-
-		window.addEventListener('resize', () => {
-			if (canvasElement && canvasElement.parentElement) {
-				canvasElement.width = canvasElement.parentElement.clientWidth;
-			}
-		});
+		// The canvas buffer follows its box, which stretches to fill Live Studio's height.
+		const box = canvasElement?.parentElement;
+		const resize = () => {
+			if (!canvasElement || !box) return;
+			canvasElement.width = box.clientWidth || 700;
+			canvasElement.height = box.clientHeight || 240;
+		};
+		const observer = new ResizeObserver(resize);
+		if (box) observer.observe(box);
+		resize();
 
 		animationFrameId = requestAnimationFrame(updateWaveform);
+		return () => observer.disconnect();
 	});
 
 	onDestroy(() => {
@@ -182,11 +202,11 @@
 	});
 </script>
 
-<div class="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
+<div class="flex h-full min-h-0 flex-col gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<h3 class="flex items-center gap-2 text-base font-semibold text-foreground">
-				<Pulse size={18} class="text-emerald-600" />
+			<h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
+				<Pulse size={16} class="text-emerald-600" />
 				คลื่นกล้ามเนื้อ (sEMG)
 			</h3>
 			<p class="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -253,7 +273,7 @@
 		</div>
 	</div>
 
-	<div class="relative w-full overflow-hidden rounded-lg border border-border bg-background">
-		<canvas bind:this={canvasElement} height="240" class="block w-full"></canvas>
+	<div class="relative h-56 w-full overflow-hidden rounded-lg border border-border bg-background lg:h-auto lg:min-h-0 lg:flex-1">
+		<canvas bind:this={canvasElement} class="absolute inset-0 block h-full w-full"></canvas>
 	</div>
 </div>
