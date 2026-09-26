@@ -17,7 +17,6 @@ export interface SessionTrendPoint {
 	purity: number;
 	/** % of each session's own calibrated MVC, not the raw µV the sensor/backend use. */
 	sEmgRms: number;
-	rom: number;
 	cleanVolume: number;
 }
 
@@ -58,7 +57,6 @@ class HistoryManager {
 			cleanReps: s.cleanReps,
 			purity: s.purityPercent,
 			sEmgRms: s.peakEmgPercent,
-			rom: s.avgRomDeg,
 			cleanVolume: s.cleanVolumeKg
 		}))
 	);
@@ -93,7 +91,9 @@ class HistoryManager {
 	async load() {
 		this.status = 'loading';
 		try {
-			const setsRes = await fastapiClient.GET('/v1/sessions', { params: { query: { limit: 200 } } });
+			const setsRes = await fastapiClient.GET('/v1/sessions', {
+				params: { query: { limit: 200 } }
+			});
 			if (setsRes.error || !setsRes.data) {
 				this.status = 'error';
 				return;

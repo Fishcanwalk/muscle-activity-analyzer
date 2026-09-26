@@ -49,7 +49,6 @@ export interface WorkoutSession {
 	purityPercent: number;
 	cleanVolumeKg: number;
 	highTensionTutSeconds: number;
-	avgRomDeg: number;
 	/** Highest rep sEMG peak, as % of the MVC calibrated for that set's session. */
 	peakEmgPercent: number;
 }
@@ -81,7 +80,6 @@ export function summarizeSets(id: string, sets: SetResult[]): WorkoutSession | n
 
 function buildSession(id: string, group: SetResult[]): WorkoutSession {
 	const ordered = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at));
-	const reps = ordered.flatMap((s) => s.reps ?? []);
 	const totalReps = ordered.reduce((sum, s) => sum + s.totalReps, 0);
 	const cleanReps = ordered.reduce((sum, s) => sum + s.cleanReps, 0);
 	return {
@@ -98,7 +96,6 @@ function buildSession(id: string, group: SetResult[]): WorkoutSession {
 		highTensionTutSeconds: Number(
 			ordered.reduce((sum, s) => sum + s.highTensionTutSeconds, 0).toFixed(1)
 		),
-		avgRomDeg: reps.length ? Math.round(reps.reduce((sum, r) => sum + r.rom, 0) / reps.length) : 0,
 		peakEmgPercent: Math.max(0, ...ordered.map(setPeakEmgPercent))
 	};
 }
@@ -160,7 +157,6 @@ export function compareSessions(prev: WorkoutSession, curr: WorkoutSession): Met
 			' kg',
 			1
 		),
-		metric('Average ROM (องศาข้อศอก)', prev.avgRomDeg, curr.avgRomDeg, '°'),
 		metric('ออกแรงกล้ามเนื้อสูงสุด (% MVC)', prev.peakEmgPercent, curr.peakEmgPercent, '%'),
 		metric('High-Tension TUT', prev.highTensionTutSeconds, curr.highTensionTutSeconds, ' วินาที', 1)
 	];
@@ -178,10 +174,6 @@ export function progressVerdict(prev: WorkoutSession, curr: WorkoutSession): str
 	const purityDiff = curr.purityPercent - prev.purityPercent;
 	if (purityDiff !== 0) {
 		parts.push(`ท่าคลีน${purityDiff > 0 ? 'ดีขึ้น' : 'ลดลง'} ${Math.abs(purityDiff)}%`);
-	}
-	const romDiff = curr.avgRomDeg - prev.avgRomDeg;
-	if (romDiff !== 0) {
-		parts.push(`ROM ${romDiff > 0 ? 'กว้างขึ้น' : 'แคบลง'} ${Math.abs(romDiff)}°`);
 	}
 	const verdict =
 		volumeDiff > 0 && purityDiff >= 0

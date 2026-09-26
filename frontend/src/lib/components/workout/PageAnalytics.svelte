@@ -53,34 +53,20 @@
 		return () => chart.destroy();
 	}
 
-	function romChart(canvas: HTMLCanvasElement) {
+	function emgChart(canvas: HTMLCanvasElement) {
 		const trend = history.sessionsTrend;
-		const labels = trend.map((t) => t.session);
-		const romData = trend.map((t) => t.rom);
-		const emgData = trend.map((t) => t.sEmgRms);
-
 		const chart = new Chart(canvas, {
 			type: 'line',
 			data: {
-				labels,
+				labels: trend.map((t) => t.session),
 				datasets: [
 					{
-						label: 'ROM เฉลี่ย (°)',
-						data: romData,
-						borderColor: '#06b6d4',
-						backgroundColor: 'rgba(6, 182, 212, 0.1)',
-						tension: 0.3,
-						fill: true,
-						yAxisID: 'y'
-					},
-					{
-						label: 'ออกแรงกล้ามเนื้อสูงสุด (%)',
-						data: emgData,
+						label: 'ออกแรงกล้ามเนื้อสูงสุด (% MVC)',
+						data: trend.map((t) => t.sEmgRms),
 						borderColor: '#a855f7',
-						backgroundColor: 'transparent',
-						borderDash: [5, 5],
+						backgroundColor: 'rgba(168, 85, 247, 0.1)',
 						tension: 0.3,
-						yAxisID: 'y1'
+						fill: true
 					}
 				]
 			},
@@ -92,20 +78,7 @@
 				},
 				scales: {
 					x: { ticks: { color: '#52525b' }, grid: { color: 'rgba(0,0,0,0.06)' } },
-					y: {
-						type: 'linear',
-						display: true,
-						position: 'left',
-						ticks: { color: '#06b6d4' },
-						grid: { color: 'rgba(0,0,0,0.06)' }
-					},
-					y1: {
-						type: 'linear',
-						display: true,
-						position: 'right',
-						ticks: { color: '#a855f7' },
-						grid: { drawOnChartArea: false }
-					}
+					y: { beginAtZero: true, ticks: { color: '#a855f7' }, grid: { color: 'rgba(0,0,0,0.06)' } }
 				}
 			}
 		});
@@ -243,10 +216,10 @@
 
 		<div class="rounded-xl border border-border bg-card p-5 shadow-md">
 			<h3 class="text-base font-bold text-foreground">
-				ช่วงการเคลื่อนไหว (ROM) & แรงกล้ามเนื้อ
+				แรงกล้ามเนื้อสูงสุดแต่ละ session
 			</h3>
 			<div class="relative mt-4 h-64 w-full">
-				<canvas {@attach romChart}></canvas>
+				<canvas {@attach emgChart}></canvas>
 			</div>
 		</div>
 	</div>

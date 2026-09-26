@@ -26,12 +26,13 @@ export interface UserProfile {
 		longestTutSec: number;
 		/** % of the user's calibrated MVC, not the raw µV the sensor/backend use internally. */
 		peakEmgPercent: number;
-		bestRomDeg: number;
+		/** Fastest rep (peak concentric velocity, m/s). */
+		bestVelocityMs: number;
 		lowestCheatPercent: number;
 	};
 	weeklyVolume: { week: string; clean: number; cheated: number }[];
 	/** emgPercent: % of calibrated MVC, not raw µV. */
-	formProgression: { id: string; session: string; purity: number; rom: number; emgPercent: number }[];
+	formProgression: { id: string; session: string; purity: number; emgPercent: number }[];
 	/** One entry per workout session (sets grouped by session_id), newest first. */
 	historyLogs: {
 		id: string;
@@ -42,7 +43,6 @@ export interface UserProfile {
 		totalReps: number;
 		cleanReps: number;
 		purity: number;
-		rom: number;
 		notes: string;
 	}[];
 }

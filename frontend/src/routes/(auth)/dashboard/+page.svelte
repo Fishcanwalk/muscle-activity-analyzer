@@ -178,16 +178,16 @@
 					<div class="text-xs text-muted-foreground mt-0.5">% ของแรงสูงสุดที่เคยทำได้</div>
 				</div>
 
-				<!-- Best ROM -->
+				<!-- Fastest rep -->
 				<div class="p-3 rounded-xl bg-card border border-border hover:border-border transition">
 					<div class="flex items-center justify-between text-muted-foreground mb-1">
-						<span class="text-sm">ROM กว้างสุด</span>
+						<span class="text-sm">ความเร็วยกสูงสุด</span>
 						<Compass size={14} class="text-blue-600" />
 					</div>
 					<div class="text-2xl font-bold tabular-nums text-foreground">
-						{currentUser.personalRecords.bestRomDeg}°
+						{currentUser.personalRecords.bestVelocityMs} <span class="text-sm font-normal text-muted-foreground">m/s</span>
 					</div>
-					<div class="text-xs text-muted-foreground mt-0.5">มุมข้อศอก</div>
+					<div class="text-xs text-muted-foreground mt-0.5">rep ที่เร็วที่สุด</div>
 				</div>
 
 				<!-- Cheat Rate -->
@@ -247,7 +247,7 @@
 			<div class="lg:col-span-5 rounded-xl border border-border bg-card p-4 space-y-3">
 				<div class="flex items-center gap-2">
 					<Pulse size={16} class="text-muted-foreground" />
-					<span class="text-base font-semibold text-foreground">ความคลีนและ ROM ย้อนหลัง</span>
+					<span class="text-base font-semibold text-foreground">ความคลีนและแรงกล้ามเนื้อย้อนหลัง</span>
 				</div>
 
 				<div class="space-y-1.5 tabular-nums text-xs">
@@ -255,7 +255,6 @@
 						<div class="flex items-center justify-between p-2 rounded-lg bg-muted/50 border border-border">
 							<span class="text-muted-foreground text-xs font-sans">{fp.session}</span>
 							<div class="flex items-center gap-3">
-								<span class="text-foreground/80">{fp.rom}°</span>
 								<span class="text-emerald-600 font-semibold">{fp.purity}%</span>
 								<span class="text-xs text-muted-foreground">ออกแรง {fp.emgPercent}%</span>
 							</div>
@@ -293,7 +292,6 @@
 								<div class="flex items-center gap-3 tabular-nums text-xs">
 									<span class="text-foreground/80">{log.sets} เซต · {log.totalReps} ครั้ง</span>
 									<span class="text-emerald-600 font-semibold">คลีน {log.purity}%</span>
-									<span class="text-cyan-600">{log.rom}° ROM</span>
 								</div>
 							</div>
 							{#if log.notes}

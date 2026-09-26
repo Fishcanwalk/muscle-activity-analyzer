@@ -81,7 +81,9 @@ function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserPro
 		longestTutSec: sets.length ? Math.max(...sets.map((s) => s.highTensionTutSeconds)) : 0,
 		// Each session's own calibration, so this compares effort not raw signal level.
 		peakEmgPercent: sessions.length ? Math.max(...sessions.map((s) => s.peakEmgPercent)) : 0,
-		bestRomDeg: allReps.length ? Math.round(Math.max(...allReps.map((r) => r.rom))) : 0,
+		bestVelocityMs: allReps.length
+			? Math.round(Math.max(0, ...allReps.map((r) => r.concentricVelocity)) * 100) / 100
+			: 0,
 		lowestCheatPercent: cheatPercents.length ? Math.round(Math.min(...cheatPercents) * 10) / 10 : 0
 	};
 
@@ -99,7 +101,6 @@ function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserPro
 		id: s.id,
 		session: thaiShortDate(s.startedAt),
 		purity: s.purityPercent,
-		rom: s.avgRomDeg,
 		emgPercent: s.peakEmgPercent
 	}));
 
@@ -115,7 +116,6 @@ function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserPro
 			totalReps: s.totalReps,
 			cleanReps: s.cleanReps,
 			purity: s.purityPercent,
-			rom: s.avgRomDeg,
 			notes: ''
 		}));
 
