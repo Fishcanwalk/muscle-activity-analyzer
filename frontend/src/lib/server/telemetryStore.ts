@@ -31,13 +31,12 @@ export interface FullTelemetryPacket {
 		force?: number;
 		stability?: number;
 	};
+	// Only lifting velocity: the board is strapped on at a different angle every time, so
+	// its angles/raw axes mean nothing across sessions (older firmware still sends them).
 	mpu?: {
-		pitch?: number;
-		roll?: number;
 		velocity?: number;
-		ax?: number;
-		ay?: number;
-		az?: number;
+		/** Highest velocity within this batch (the firmware samples at 100 Hz, posts at 4 Hz). */
+		peakVelocity?: number;
 	};
 	vitals?: {
 		hr?: number;
@@ -59,8 +58,10 @@ function round3(n: number | undefined | null): number {
 }
 
 // ESP32 ADC is 12-bit (analogRead() -> 0-4095) on a nominal 3.3V reference.
-// docs/sensor_usage.md specifies sEMG in µV (High-Tension >= 280µV, ~45-50% MVC)
-// and FSR grip force in Newtons, so raw ADC counts are converted into those units here.
+// docs/sensor_usage.md specifies sEMG in µV (High-Tension >= 280µV, ~45-50% MVC), so
+// raw ADC counts are converted into that unit here. FSR grip is reported as % of the
+// session's calibrated max squeeze: a bare FSR can't give Newtons without a known-weight
+// reference, and the old fixed 50 N full scale capped every grip at ~5 kg.
 const ADC_MAX = 4095;
 const ADC_VREF_MV = 3300;
 
@@ -78,9 +79,6 @@ const EMG_GAIN = 1000;
 const EMG_SAMPLE_MS = 10;
 // Moving-average window smoothing the SIG output into the envelope rep counting uses.
 const EMG_ENVELOPE_WINDOW = 10; // samples = 100 ms
-
-// Assumed full-scale grip force (Newtons) at max ADC reading; calibrate via fsrMax.
-const FSR_MAX_N = 50;
 
 // Single shared hardware rig, one active recording at a time (see plan's Accepted
 // Tradeoffs). Not a per-user map -- starting a recording for a different user while
@@ -106,12 +104,12 @@ function adcToEmgUv(rawAdc: number, baseline = 0): number {
 }
 
 // `zeroAdc`/`maxAdc` come from state.calibration.fsrZero/fsrMax — both raw ADC counts
-// (the "zero grip" and "max grip" readings captured during calibration). They default
-// to 0 and ADC_MAX so an uncalibrated system reproduces the old raw-ADC-over-full-range
-// math. The Newtons full scale (FSR_MAX_N) stays a fixed constant, not user-calibrated.
-function adcToForceN(rawAdc: number, zeroAdc = 0, maxAdc = ADC_MAX): number {
+// (the "no grip" and "max squeeze" readings captured during calibration). They default
+// to 0 and ADC_MAX, i.e. % of the full ADC range until calibrated. Can exceed 100% when
+// squeezing harder than during calibration.
+function adcToGripPercent(rawAdc: number, zeroAdc = 0, maxAdc = ADC_MAX): number {
 	const span = Math.max(1, maxAdc - zeroAdc);
-	return (Math.max(0, rawAdc - zeroAdc) / span) * FSR_MAX_N;
+	return (Math.max(0, rawAdc - zeroAdc) / span) * 100;
 }
 
 class ServerTelemetryState {
@@ -123,6 +121,7 @@ class ServerTelemetryState {
 	private secondCounter = 0;
 	private lastRateCalc = Date.now();
 	private recording: RecordingSlot | null = null;
+	private buzzerTestPending = false;
 	private envelopeWindow: number[] = [];
 	private emgRepDetector = new EmgRepDetector();
 
@@ -148,17 +147,13 @@ class ServerTelemetryState {
 			// Uncalibrated ADC count, kept so the calibration page can capture
 			// fsrZero/fsrMax (which are raw ADC counts) from live readings.
 			rawAdc: 0,
-			gripForce: 0,
+			gripPercent: 0,
 			gripStability: 95,
 			isStable: true
 		},
 		mpu: {
-			pitch: 0.0,
-			roll: 0.0,
 			velocity: 0.0,
-			ax: 0.0,
-			ay: 0.0,
-			az: 0.0
+			peakVelocity: 0.0
 		},
 		vitals: {
 			hr: 72,
@@ -269,19 +264,19 @@ class ServerTelemetryState {
 		}
 
 		if (data.fsr) {
-			const forceN =
+			const gripPercent =
 				data.fsr.force !== undefined
 					? round3(
-							adcToForceN(
+							adcToGripPercent(
 								data.fsr.force,
 								this.state.calibration.fsrZero,
 								this.state.calibration.fsrMax
 							)
 						)
-					: this.state.fsr.gripForce;
+					: this.state.fsr.gripPercent;
 			this.state.fsr = {
 				rawAdc: data.fsr.force !== undefined ? round3(data.fsr.force) : this.state.fsr.rawAdc,
-				gripForce: forceN,
+				gripPercent,
 				gripStability:
 					data.fsr.stability !== undefined
 						? round3(data.fsr.stability)
@@ -293,13 +288,10 @@ class ServerTelemetryState {
 
 		if (data.mpu) {
 			this.state.mpu = {
-				pitch: data.mpu.pitch !== undefined ? round3(data.mpu.pitch) : this.state.mpu.pitch,
-				roll: data.mpu.roll !== undefined ? round3(data.mpu.roll) : this.state.mpu.roll,
 				velocity:
 					data.mpu.velocity !== undefined ? round3(data.mpu.velocity) : this.state.mpu.velocity,
-				ax: data.mpu.ax !== undefined ? round3(data.mpu.ax) : this.state.mpu.ax,
-				ay: data.mpu.ay !== undefined ? round3(data.mpu.ay) : this.state.mpu.ay,
-				az: data.mpu.az !== undefined ? round3(data.mpu.az) : this.state.mpu.az
+				// Older firmware sends no peak; its latest velocity is the best there is.
+				peakVelocity: round3(data.mpu.peakVelocity ?? data.mpu.velocity ?? this.state.mpu.velocity)
 			};
 			this.state.sensors.mpu.lastSeen = now;
 		}
@@ -355,6 +347,25 @@ class ServerTelemetryState {
 			peakPct: c.emgRepPeakPct
 		});
 		this.broadcast('calibration', this.state.calibration);
+	}
+
+	// The web can't reach the board directly; the board picks this up from the reply to
+	// its next telemetry POST (see takeBoardCommands) and beeps a few times.
+	requestBuzzerTest() {
+		this.buzzerTestPending = true;
+	}
+
+	/** What the reply to the board's telemetry POST carries back to it. */
+	takeBoardCommands() {
+		const beep = this.buzzerTestPending;
+		this.buzzerTestPending = false;
+		// The firmware turns raw FSR counts into % of this session's max squeeze itself, so
+		// its grip-loss buzzer reacts at 100 Hz instead of waiting on the network. Until the
+		// FSR is calibrated (still the 0..ADC_MAX default) it gets an empty range, which the
+		// firmware reads as "no grip alerts yet".
+		const { fsrZero, fsrMax } = this.state.calibration;
+		const calibrated = !(fsrZero === 0 && fsrMax === ADC_MAX);
+		return { fsrZero: calibrated ? fsrZero : 0, fsrMax: calibrated ? fsrMax : 0, beep };
 	}
 
 	resetCalibration() {

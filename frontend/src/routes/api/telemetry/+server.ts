@@ -18,7 +18,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			success: true,
 			receivedAt: Date.now(),
 			packetCount: serverTelemetry.state.device.packetCount,
-			rateHz: serverTelemetry.state.device.rateHz
+			rateHz: serverTelemetry.state.device.rateHz,
+			...serverTelemetry.takeBoardCommands()
 		});
 	} catch (err: any) {
 		return json({ success: false, error: err?.message || 'Invalid JSON' }, { status: 400 });
