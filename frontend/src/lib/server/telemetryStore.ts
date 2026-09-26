@@ -130,6 +130,8 @@ class ServerTelemetryState {
 		emg: {
 			raw: 0,
 			rawBuffer: this.rawBuffer,
+			/** Latest batch's mean with no baseline subtracted, for capturing the resting baseline. */
+			level: 0,
 			rms: 0,
 			peak: 0,
 			mvcPercent: 0,
@@ -216,8 +218,11 @@ class ServerTelemetryState {
 		let lastUv = this.state.emg.raw;
 		let envelopeUv = this.state.emg.rms;
 		let windowPeakPct = 0;
+		let levelSum = 0;
 		for (const raw of raws) {
-			lastUv = adcToEmgUv(raw, emgBaseline);
+			const unadjustedUv = adcToEmgUv(raw);
+			levelSum += unadjustedUv;
+			lastUv = unadjustedUv - emgBaseline;
 			this.rawBuffer.shift();
 			this.rawBuffer.push(round3(lastUv));
 
@@ -240,6 +245,7 @@ class ServerTelemetryState {
 		this.state.emg = {
 			raw: round3(lastUv),
 			rawBuffer: [...this.rawBuffer],
+			level: raws.length ? round3(levelSum / raws.length) : this.state.emg.level,
 			rms,
 			peak: emg.peak !== undefined ? round3(emg.peak) : Math.max(rms, this.state.emg.peak),
 			mvcPercent,

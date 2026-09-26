@@ -7,6 +7,7 @@ export { round3, formatDec };
 class TelemetryManager {
 	emg = $state({
 		rawBuffer: Array(EMG_BUFFER_SIZE).fill(0),
+		level: 0,
 		rms: 0,
 		mvcPercent: 0,
 		isHighTension: false
@@ -80,8 +81,7 @@ class TelemetryManager {
 	device = $state({ board: '', packetCount: 0 });
 
 	// The calibration the SvelteKit server is currently applying to incoming samples
-	// (telemetryStore.ts's state.calibration, included in every SSE packet). The
-	// calibration page needs it because rawBuffer arrives already baseline-adjusted.
+	// (telemetryStore.ts's state.calibration, included in every SSE packet).
 	serverCalibration = $state({
 		emgBaseline: 0,
 		emgMvc: 550,
@@ -160,6 +160,7 @@ class TelemetryManager {
 							if (Array.isArray(data.emg.rawBuffer) && data.emg.rawBuffer.length > 0) {
 								this.emg.rawBuffer = data.emg.rawBuffer.map((r: number) => round3(r));
 							}
+							if (data.emg.level !== undefined) this.emg.level = round3(data.emg.level);
 							if (data.emg.rms !== undefined) this.emg.rms = round3(data.emg.rms);
 							if (data.emg.mvcPercent !== undefined)
 								this.emg.mvcPercent = round3(data.emg.mvcPercent);

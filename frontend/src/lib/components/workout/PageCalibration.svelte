@@ -145,7 +145,7 @@
 					>
 						{calibration.stepDone.emgZero ? '✓ วัดแล้ว' : 'ยังไม่ได้วัด'}
 					</div>
-					<span class="text-sm text-muted-foreground">ค่าที่ใช้: {calibration.emgZeroOffsetUv} µV · สด: {Math.round(telemetry.emg.rms)} µV</span>
+					<span class="text-sm text-muted-foreground">ค่าที่ใช้: {calibration.emgZeroOffsetUv} µV · สด: {Math.round(telemetry.emg.level)} µV</span>
 					<p class="mt-2 text-sm text-muted-foreground leading-relaxed">ผ่อนคลายแขนให้สุด กดปุ่มแล้วอยู่นิ่ง 3 วินาที</p>
 					<button
 						onclick={() => runCapture('emgZero')}

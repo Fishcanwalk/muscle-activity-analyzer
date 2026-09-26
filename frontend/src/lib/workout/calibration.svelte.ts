@@ -172,12 +172,11 @@ class CalibrationManager {
 			: telemetry.sensorStatus.fsr === 'live';
 		if (!sensorLive) return null;
 		switch (step) {
-			case 'emgZero': {
-				// rawBuffer is already offset by the server's current baseline, so adding
-				// it back gives the unadjusted resting DC level.
-				const buf = telemetry.emg.rawBuffer;
-				return mean(buf) + telemetry.serverCalibration.emgBaseline;
-			}
+			// The server's unadjusted level, not rawBuffer + baseline: rawBuffer keeps 1.5 s
+			// of samples converted with whatever baseline was active then, so right after a
+			// capture it still holds the old offset and re-measuring would add the two up.
+			case 'emgZero':
+				return telemetry.emg.level;
 			case 'emgMvc':
 				return telemetry.emg.rms;
 			case 'fsrZero':
