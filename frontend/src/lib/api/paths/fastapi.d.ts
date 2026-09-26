@@ -225,6 +225,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/readiness/grip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Grip Test
+         * @description Saves a pre-workout grip test and compares it with the user's recent ones.
+         */
+        post: operations["record_grip_test_v1_readiness_grip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/billing/config": {
         parameters: {
             query?: never;
@@ -496,12 +516,30 @@ export interface components {
         FsrState: {
             /** Gripforce */
             gripForce?: number | null;
+            /** Grippercent */
+            gripPercent?: number | null;
             /** Gripstability */
             gripStability?: number | null;
             /** Isstable */
             isStable?: boolean | null;
         } & {
             [key: string]: unknown;
+        };
+        /** GripTestCreate */
+        GripTestCreate: {
+            /** Peakspanadc */
+            peakSpanAdc: number;
+        };
+        /** GripTestResult */
+        GripTestResult: {
+            /** Peakspanadc */
+            peakSpanAdc: number;
+            /** Baselinespanadc */
+            baselineSpanAdc?: number | null;
+            /** Readinesspercent */
+            readinessPercent?: number | null;
+            /** Previoustests */
+            previousTests: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1212,6 +1250,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Calibration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_grip_test_v1_readiness_grip_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GripTestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GripTestResult"];
                 };
             };
             /** @description Validation Error */
