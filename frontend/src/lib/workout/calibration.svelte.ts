@@ -43,6 +43,10 @@ const CAPTURE_DURATION_MS: Record<CalibrationStep, number> = {
 // fsrMax must clear fsrZero by at least this many ADC counts, otherwise the
 // squeeze didn't register and the grip-force scale would be meaningless.
 const MIN_FSR_SPAN_ADC = 200;
+// The MVC reading is already baseline-subtracted. One step of the Uno's 10-bit ADC is
+// ~3 on this scale, so anything below this is ADC noise, not a contraction: accepting
+// it would turn every twitch into ~100% MVC.
+const MIN_EMG_MVC_UV = 50;
 
 export type CaptureResult = { ok: true; value: number } | { ok: false; error: string };
 
@@ -220,8 +224,12 @@ class CalibrationManager {
 				break;
 			case 'emgMvc':
 				value = Math.round(Math.max(...samples));
-				if (value <= 0)
-					return { ok: false, error: 'ไม่พบสัญญาณการเกร็งกล้ามเนื้อ ลองใหม่อีกครั้ง' };
+				if (value < MIN_EMG_MVC_UV) {
+					return {
+						ok: false,
+						error: `สัญญาณตอนเกร็งสูงกว่าตอนพักแค่ ${value} µV แปลว่าเซนเซอร์ไม่ตอบสนองต่อการเกร็ง ตรวจสายสัญญาณ ขั้วอิเล็กโทรด และไฟเลี้ยงของโมดูล sEMG`
+					};
+				}
 				this.emgMvcPeakUv = value;
 				break;
 			case 'fsrZero':
