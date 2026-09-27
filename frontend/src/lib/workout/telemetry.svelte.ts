@@ -10,6 +10,8 @@ export { round3, formatDec };
 const REP_WINDOW_LEAD_MS = 750;
 // How much velocity history is kept; comfortably longer than any single rep.
 const VELOCITY_HISTORY_MS = 15_000;
+// A heart rate only counts as the set's peak once it has held this long.
+const PEAK_HR_HOLD_MS = 3_000;
 
 class TelemetryManager {
 	emg = $state({
@@ -191,9 +193,7 @@ class TelemetryManager {
 						if (data.vitals) {
 							if (data.vitals.hr !== undefined) {
 								this.vitals.heartRate = round3(data.vitals.hr);
-								if (this.vitals.heartRate > this.vitals.peakHr) {
-									this.vitals.peakHr = this.vitals.heartRate;
-								}
+								this.trackPeakHr(this.vitals.heartRate);
 							}
 							if (data.vitals.spo2 !== undefined) this.vitals.spO2 = round3(data.vitals.spo2);
 							if (data.vitals.skinTemp !== undefined) {
@@ -280,7 +280,28 @@ class TelemetryManager {
 		this.lastRepAt = now;
 	}
 
+	// "Peak while lifting": only readings during a running set count, and the peak is the
+	// lowest reading over the last PEAK_HR_HOLD_MS -- one motion-artifact spike from the
+	// MAX30102 (a finger shifting mid-rep) would otherwise stick as the peak.
+	private recentHr: { at: number; hr: number }[] = [];
+
+	private trackPeakHr(hr: number) {
+		if (!workout.isSetRunning || hr <= 0) {
+			this.recentHr = [];
+			return;
+		}
+		const now = performance.now();
+		this.recentHr.push({ at: now, hr });
+		this.recentHr = this.recentHr.filter((e) => e.at >= now - PEAK_HR_HOLD_MS);
+		if (now - this.recentHr[0].at < PEAK_HR_HOLD_MS - 500) return;
+		const sustained = Math.min(...this.recentHr.map((e) => e.hr));
+		if (sustained > this.vitals.peakHr) this.vitals.peakHr = sustained;
+	}
+
 	private resetRepWindow() {
+		// Each set gets its own peak HR, so recovery compares against this set's effort.
+		this.vitals.peakHr = 0;
+		this.recentHr = [];
 		this.velocitySamples = [];
 		this.lastRepAt = performance.now();
 		// Velocity loss is measured within one set, from its first rep.

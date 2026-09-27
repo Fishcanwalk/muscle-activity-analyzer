@@ -126,6 +126,7 @@ bool unoLinkWasOk = false;
 const byte RATE_SIZE = 4;
 byte bpmRates[RATE_SIZE];
 byte bpmRateSpot = 0;
+byte bpmRateCount = 0;
 long lastBeat = 0;
 int beatAvg = 0;
 const long FINGER_PRESENT_IR_THRESHOLD = 50000;
@@ -611,14 +612,19 @@ void sensorTask(void *pvParameters) {
               if (bpm > 40 && bpm < 220) {
                 bpmRates[bpmRateSpot++] = (byte)bpm;
                 bpmRateSpot %= RATE_SIZE;
-                long sum = 0;
-                for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
-                beatAvg = sum / RATE_SIZE;
+                if (bpmRateCount < RATE_SIZE) bpmRateCount++;
+                if (bpmRateCount == RATE_SIZE) {
+                  long sum = 0;
+                  for (byte i = 0; i < RATE_SIZE; i++) sum += bpmRates[i];
+                  beatAvg = sum / RATE_SIZE;
+                }
               }
             }
             updateSpo2Window(irValue, redValue);
           } else {
             beatAvg = 0;
+            bpmRateCount = 0;
+            lastBeat = 0;
           }
 
           max30102.nextSample();

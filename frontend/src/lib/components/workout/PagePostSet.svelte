@@ -16,7 +16,7 @@
 	let restSecondsLeft = $state(120);
 	let restTimer: any = null;
 
-	// Live MAX30102 heart-rate recovery: peak is the session-wide max seen so far
+	// Live MAX30102 heart-rate recovery: peak is the last set's sustained max
 	// (telemetry.vitals.peakHr), current updates live while resting on this page.
 	let hrrPeak = $derived(Math.round(telemetry.vitals.peakHr));
 	let hrrCurrent = $derived(Math.round(telemetry.vitals.heartRate));
