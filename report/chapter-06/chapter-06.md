@@ -25,6 +25,8 @@ telemetry ที่ส่งต่อกันในผังนี้มีโ�
 
 ## 6.2 Arduino Uno: Timer1, ADC Interrupt, Watchdog และ UART
 
+### 6.2.1 ภาพรวมการทำงาน
+
 **การจับเวลารอบ sampling:** ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ความถี่ 100 Hz หรือทุก 10 ms ทุกครั้งที่เกิด `TIMER1_COMPA_vect` ระบบจะตั้ง `FLAG_TIMER_TICK` เพื่อให้ loop เริ่มรอบอ่านข้อมูลใหม่ ทำให้รอบ sampling สม่ำเสมอ
 
 **การอ่านค่า ADC ด้วย interrupt:** ในแต่ละรอบ Uno อ่านค่า 2 ช่อง คือ EMG ที่ขา A0 และ FSR ที่ขา A1 โดยสั่งให้ ADC เริ่มแปลงค่าแล้วไม่ต้องรอ เมื่อแปลงค่าเสร็จ ADC จะเรียก interrupt ให้เก็บค่าไว้ แล้วเริ่มอ่านช่องถัดไปต่อทันที เมื่ออ่านครบทั้ง 2 ช่อง โปรแกรมหลักจะนำค่าไปใช้ ส่วนค่า FSR ต้องกลับด้านก่อน เพราะเซนเซอร์ให้ค่าสูงตอนไม่มีแรงกด
@@ -34,6 +36,199 @@ telemetry ที่ส่งต่อกันในผังนี้มีโ�
 **การป้องกันระบบค้าง:** ใช้ Watchdog Timer ของ Uno โดยตั้ง timeout ไว้ 2 วินาที และเรียก `wdt_reset()` ทุกครั้งที่อ่านข้อมูลครบหนึ่งรอบ หากรอบการอ่านค้างนานเกิน 2 วินาที ระบบจะรีสตาร์ทบอร์ดโดยอัตโนมัติ
 
 **การส่งข้อมูลไปยัง ESP32:** แปลงค่า ADC 10-bit (0-1023) เป็นช่วง 0-4095 ด้วย `map()` ให้ตรงกับช่วงค่าที่ ESP32 และ backend ใช้ แล้วส่งผ่าน `Serial` ที่ขา 0/1 ด้วยความเร็ว 9600 baud ในรูปแบบ `emg,fsr` บรรทัดละหนึ่งรอบ
+
+### 6.2.2 โค้ดและการทำงานของโค้ด
+
+โค้ดในหัวข้อนี้ยกมาจากไฟล์ `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino` โดยตรง บรรทัดที่ละไว้แสดงด้วย `// ...`
+
+ATmega328P บน Arduino Uno มี RAM เพียง 2 KB ไม่พอสำหรับรัน FreeRTOS แบบฝั่ง ESP32 เฟิร์มแวร์ของ Uno จึงใช้กลไกของชิป AVR โดยตรงแทน แต่ยังคงใช้แนวคิดเดียวกัน คือใช้ hardware timer กำหนดจังหวะ ใช้ interrupt แทนการวนรอ ใช้ watchdog ป้องกันระบบค้าง และให้ CPU พักระหว่างรอ
+
+#### 6.2.2.1 การเริ่มต้นระบบใน `setup()`
+
+เมื่อเปิดเครื่อง `setup()` จะเตรียมส่วนต่าง ๆ ตามลำดับ โดยจัดการ watchdog ก่อน แล้วเปิดช่องทางส่งข้อมูล ตั้งค่า timer และ ADC จากนั้นเลือกโหมดพัก และเปิด watchdog เป็นขั้นสุดท้าย
+
+```cpp
+void setup() {
+  MCUSR = 0;
+  wdt_disable();
+
+  Serial.begin(ESP32_LINK_BAUD);
+  setupBoardAdc();
+  setupSampleTimer();
+  setupAdc();
+
+  set_sleep_mode(SLEEP_MODE_IDLE);
+
+  wdt_enable(WDTO_2S);
+}
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 88–105](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L88-L105)
+
+ขั้นแรกระบบปิด watchdog ไว้ก่อนชั่วคราว เหตุผลอธิบายไว้ในหัวข้อ 6.2.2.5 ต่อมาจึงเปิด `Serial` ที่ความเร็ว 9600 baud เพื่อใช้ส่งข้อมูลไปยัง ESP32 แล้วตั้งค่า Timer1 (หัวข้อ 6.2.2.2) และ ADC (หัวข้อ 6.2.2.3) ส่วน `setupBoardAdc()` มาจาก `board_config.h` ซึ่งใช้ร่วมกันหลายบอร์ด บน Uno ฟังก์ชันนี้ไม่ได้ทำอะไร แต่เก็บไว้ให้โครงสร้างโค้ดเหมือนกับฝั่ง ESP32
+
+หลังจากนั้นระบบเลือกโหมดพักของ CPU ไว้ล่วงหน้า (หัวข้อ 6.2.2.4) และเปิด watchdog เป็นขั้นสุดท้าย เพราะเมื่อเปิดแล้วระบบต้องเริ่มรีเซ็ต watchdog เป็นระยะ ถ้าเปิดไว้ตั้งแต่ต้น ช่วงที่ยังตั้งค่าไม่เสร็จอาจทำให้บอร์ดถูกรีสตาร์ทโดยไม่จำเป็น
+
+#### 6.2.2.2 การจับเวลารอบ sampling ด้วย Timer1
+
+Uno ต้องอ่านค่าเซนเซอร์ให้ตรงทุก 10 ms (100 Hz) เท่ากับฝั่ง ESP32 ถ้าใช้ `delay()` หรือคอยเทียบเวลาจาก `millis()` CPU จะต้องตื่นอยู่ตลอดและรอบจะคลาดตามเวลาที่ใช้ทำงานในแต่ละรอบ ระบบจึงใช้ Timer1 ซึ่งเป็นวงจรนับเวลาในชิป และนับต่อไปได้เองแม้ CPU จะพักอยู่
+
+```cpp
+#define TIMER1_OCR1A_VALUE ((F_CPU / 64UL / SAMPLE_RATE_HZ) - 1)
+
+void setupSampleTimer() {
+  cli();
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
+  OCR1A = TIMER1_OCR1A_VALUE;
+  TCCR1B |= (1 << WGM12);
+  TCCR1B |= (1 << CS11) | (1 << CS10);
+  TIMSK1 |= (1 << OCIE1A);
+  sei();
+}
+
+ISR(TIMER1_COMPA_vect) {
+  eventFlags |= FLAG_TIMER_TICK;
+}
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 41–57](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L41-L57)
+
+ชิปทำงานที่ 16 MHz ซึ่งเร็วเกินกว่าจะนำมานับตรง ๆ จึงหารความถี่ด้วย 64 (prescaler) ก่อน timer จึงนับขึ้นหนึ่งครั้งทุก 4 µs เมื่อนับครบ 2,500 ครั้งก็จะได้ 10 ms พอดี ค่าที่ตั้งไว้คือ 2,499 เพราะ timer เริ่มนับจาก 0
+
+timer ทำงานในโหมด CTC เมื่อนับถึงค่าที่ตั้งไว้ จะเกิด interrupt แล้วกลับไปเริ่มนับจาก 0 ใหม่เองทันที รอบถัดไปจึงเริ่มตรงเวลาเสมอ โดยไม่ต้องมีโปรแกรมมาตั้งค่าใหม่ ระหว่างตั้งค่า timer ระบบปิด interrupt ไว้ชั่วคราว (`cli()` / `sei()`) เพื่อไม่ให้ interrupt เกิดขึ้นขณะที่ตั้งค่ายังไม่ครบ
+
+เมื่อเกิด interrupt ฟังก์ชันที่รับ interrupt ทำเพียงอย่างเดียว คือ "ยกธง" บอกโปรแกรมหลักว่าถึงรอบแล้ว ส่วนงานอ่านค่าจริงจะทำใน `loop()` เพราะงานใน interrupt ต้องสั้นที่สุด ธงที่ใช้สื่อสารระหว่าง interrupt กับโปรแกรมหลักเก็บรวมไว้ในตัวแปรเดียว แต่ละบิตแทนเหตุการณ์หนึ่งอย่าง
+
+```cpp
+#define FLAG_TIMER_TICK (1 << 0)
+#define FLAG_EMG_READY  (1 << 1)
+#define FLAG_FSR_READY  (1 << 2)
+volatile uint8_t eventFlags = 0;
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 21–24](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L21-L24)
+
+interrupt เป็นฝ่ายยกธง และ `loop()` เป็นฝ่ายเอาธงลงเมื่อจัดการเหตุการณ์นั้นเสร็จแล้ว ตัวแปรนี้ประกาศเป็น `volatile` เพื่อบอกคอมไพเลอร์ว่าค่าอาจถูกเปลี่ยนจาก interrupt ได้ทุกเมื่อ โปรแกรมจึงต้องอ่านค่าจริงจากหน่วยความจำทุกครั้ง ไม่ใช้ค่าเก่าที่จำไว้
+
+#### 6.2.2.3 การอ่านค่า ADC ด้วย Interrupt
+
+ถ้าใช้ `analogRead()` CPU ต้องรอ ADC แปลงค่าจนเสร็จ ซึ่งใช้เวลาประมาณ 104 µs ต่อช่อง โดยตลอดเวลานั้น CPU ต้องตื่นอยู่และทำอย่างอื่นไม่ได้ ระบบจึงใช้วิธีสั่งให้ ADC เริ่มแปลงค่าแล้วปล่อยไว้ เมื่อแปลงเสร็จ ADC จะแจ้งกลับมาเองด้วย interrupt
+
+```cpp
+void setupAdc() {
+  ADMUX = (1 << REFS0) | ADC_CHANNEL_EMG;
+  ADCSRA = (1 << ADEN) | (1 << ADIE) |
+           (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+  DIDR0 |= (1 << ADC0D) | (1 << ADC1D);
+}
+
+void startAdcConversion(uint8_t channel) {
+  currentAdcChannel = channel;
+  ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
+  ADCSRA |= (1 << ADSC);
+}
+
+ISR(ADC_vect) {
+  int value = ADC;
+  if (currentAdcChannel == ADC_CHANNEL_EMG) {
+    emgRawIsr = value;
+    eventFlags |= FLAG_EMG_READY;
+    startAdcConversion(ADC_CHANNEL_FSR);
+  } else {
+    fsrRawIsr = value;
+    eventFlags |= FLAG_FSR_READY;
+  }
+}
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 63–86](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L63-L86)
+
+- ตอนตั้งค่า ADC ระบบใช้แรงดัน 5 V ของบอร์ดเป็นแรงดันอ้างอิง ค่าที่อ่านได้จึงอยู่ในช่วง 0–1023 ตามแรงดัน 0–5 V และเปิดให้ ADC แจ้ง interrupt เมื่อแปลงค่าเสร็จ ส่วนสัญญาณนาฬิกาของ ADC ลดลงเหลือประมาณ 125 kHz ซึ่งอยู่ในช่วงที่ ADC แปลงค่าได้แม่นยำ
+- ขา A0 และ A1 ใช้อ่านสัญญาณแอนะล็อกเท่านั้น ระบบจึงปิดวงจรอ่านค่าดิจิทัลของสองขานี้ไว้ เพื่อลดสัญญาณรบกวนและลดการใช้ไฟ
+- ADC มีตัวเดียว แต่ต้องอ่าน 2 ช่อง ระบบจึงอ่านต่อกันเป็นทอด ๆ เริ่มจาก EMG ที่ขา A0 เมื่อแปลงเสร็จ interrupt จะเก็บค่าไว้ ยกธงว่า EMG พร้อมแล้ว และสั่งให้เริ่มอ่าน FSR ที่ขา A1 ต่อทันที เมื่อ FSR แปลงเสร็จก็จะยกธงว่า FSR พร้อมแล้ว ธงนี้หมายความว่าได้ค่าครบทั้งสองช่องของรอบนั้นแล้ว
+- interrupt ต้องรู้ว่าค่าที่เพิ่งแปลงเสร็จเป็นของช่องใด ระบบจึงจดช่องที่กำลังอ่านไว้ทุกครั้งที่สั่งเริ่มแปลงค่า
+
+#### 6.2.2.4 รอบการทำงานใน `loop()` และการประหยัดพลังงาน
+
+`loop()` เป็นตัวกำหนดลำดับงานในแต่ละรอบ ช่วงที่ต้องรอ timer หรือรอ ADC แปลงค่า CPU จะพักอยู่ตลอด และตื่นขึ้นมาเฉพาะเมื่อมีงานต้องทำ
+
+```cpp
+void loop() {
+  sleep_mode();
+
+  if (!(eventFlags & FLAG_TIMER_TICK)) return;
+  eventFlags &= ~FLAG_TIMER_TICK;
+
+  startAdcConversion(ADC_CHANNEL_EMG);
+
+  while (!(eventFlags & FLAG_FSR_READY)) sleep_mode();
+  eventFlags &= ~(FLAG_EMG_READY | FLAG_FSR_READY);
+
+  cli();
+  int emgRaw = emgRawIsr;
+  int fsrRaw = fsrRawIsr;
+  sei();
+  // ...
+}
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 107–123](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L107-L123)
+
+1. ต้นรอบ CPU จะพักจนกว่าจะมี interrupt ใดก็ตามเกิดขึ้น
+2. เมื่อตื่นขึ้น โปรแกรมจะตรวจก่อนว่าธงของ timer ถูกยกหรือไม่ เพราะ interrupt อื่นก็ปลุก CPU ได้เช่นกัน ถ้ายังไม่ถึงรอบก็กลับไปพักต่อ ถ้าถึงรอบแล้วจึงเอาธงลงและเริ่มทำงาน
+3. โปรแกรมสั่งเริ่มอ่าน EMG แล้วพักรอต่อ ระหว่างนั้น interrupt ของ ADC จะอ่าน EMG แล้วต่อด้วย FSR เอง (หัวข้อ 6.2.2.3) CPU จะตื่นขึ้นมาตรวจทุกครั้งที่มี interrupt จนกว่าจะเห็นธงว่า FSR พร้อมแล้ว
+4. เมื่อได้ค่าครบ โปรแกรมคัดลอกค่าจากตัวแปรที่ interrupt เขียนไว้มาใช้ ระหว่างคัดลอกจะปิด interrupt ไว้ชั่วครู่ เพราะ Uno เป็นชิป 8 บิต การอ่านค่า 16 บิตต้องทำเป็น 2 ครั้ง ถ้า interrupt แทรกเข้ามาเปลี่ยนค่าระหว่างสองครั้งนั้น ค่าที่ได้จะผิด
+
+โหมดพักที่เลือกไว้ใน `setup()` คือ `SLEEP_MODE_IDLE` ซึ่งเป็นโหมดที่ตื้นที่สุด โหมดนี้หยุดเฉพาะ CPU แต่ Timer1, ADC และ Serial ยังทำงานต่อได้และปลุก CPU ได้ ระบบไม่เลือกโหมดที่ลึกกว่านี้ เพราะโหมดเหล่านั้นจะหยุด timer และ ADC ซึ่งเฟิร์มแวร์ต้องใช้ ข้อดีอีกข้อของการพักขณะ ADC แปลงค่าคือสัญญาณรบกวนจากวงจรดิจิทัลลดลง ค่าที่อ่านได้จึงนิ่งขึ้น
+
+#### 6.2.2.5 การป้องกันระบบค้างด้วย Watchdog Timer
+
+watchdog ของ Uno ทำงานแบบเดียวกับฝั่ง ESP32 คือเป็นตัวจับเวลาที่โปรแกรมต้องรีเซ็ตเป็นระยะ ถ้าไม่ถูกรีเซ็ตจนหมดเวลา แสดงว่าโปรแกรมค้าง ชิปจะรีสตาร์ทตัวเอง
+
+```cpp
+MCUSR = 0;
+wdt_disable();
+// ...
+wdt_enable(WDTO_2S);
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 92–104](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L92-L104)
+
+ต้น `setup()` ระบบล้างบันทึกสาเหตุการรีเซ็ตครั้งก่อน และปิด watchdog ไว้ก่อน เพราะถ้าบอร์ดเพิ่งถูกรีสตาร์ทจาก watchdog ชิปจะยังจำสถานะนั้นไว้ และ bootloader รุ่นเก่าบางรุ่นไม่ได้ล้างสถานะนี้ให้ ถ้าไม่จัดการเอง watchdog อาจทำงานต่อระหว่างที่บอร์ดกำลังเริ่มระบบ และรีสตาร์ทบอร์ดวนซ้ำไม่จบ
+
+เมื่อตั้งค่าส่วนอื่นเสร็จ ระบบจึงเปิด watchdog ด้วยเวลา 2 วินาที และรีเซ็ต watchdog หนึ่งครั้งที่ท้าย `loop()` ทุกครั้งที่อ่านและส่งข้อมูลครบหนึ่งรอบ
+
+```cpp
+wdt_reset();
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 136](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L136)
+
+ปกติหนึ่งรอบใช้เวลาประมาณ 10 ms เวลา 2 วินาทีจึงเผื่อไว้มาก watchdog จะทำงานเฉพาะเมื่อมีปัญหาจริง เช่น ADC ไม่แจ้งว่าแปลงเสร็จจนโปรแกรมรอธงอยู่ตลอดไป หรือ timer หยุดทำงาน
+
+#### 6.2.2.6 การแปลงค่าและส่งข้อมูลไปยัง ESP32
+
+ก่อนส่งข้อมูล Uno ต้องปรับค่าให้อยู่ในรูปแบบที่ ESP32 และ backend ใช้
+
+```cpp
+int fsrInverted = ADC_MAX_VAL - fsrRaw;
+int emgScaled = map(emgRaw, 0, ADC_MAX_VAL, 0, 4095);
+int fsrScaled = map(fsrInverted, 0, ADC_MAX_VAL, 0, 4095);
+
+Serial.print(emgScaled);
+Serial.print(',');
+Serial.println(fsrScaled);
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 128–134](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L128-L134)
+
+- วงจร FSR ให้ค่าสูงเมื่อไม่มีแรงกด และค่าจะลดลงเมื่อกดแรงขึ้น ซึ่งกลับด้านกับความหมายที่ต้องการ ระบบจึงกลับค่าก่อน ให้ค่ามากหมายถึงแรงกดมาก
+- ADC ของ Uno ให้ค่า 10 บิต (0–1023) แต่ฝั่ง ESP32 และ backend ออกแบบไว้สำหรับค่า 12 บิต (0–4095) ระบบจึงขยายช่วงค่าให้ตรงกัน เพื่อให้ส่วนอื่นของระบบใช้ค่าได้โดยไม่ต้องรู้ว่าข้อมูลมาจากบอร์ดใด
+- ค่าทั้งสองถูกส่งออกเป็นข้อความหนึ่งบรรทัดต่อหนึ่งรอบ คั่นด้วยเครื่องหมายจุลภาค เช่น `2048,1820` ตามด้วยตัวขึ้นบรรทัดใหม่ ฝั่ง ESP32 ใช้ตัวขึ้นบรรทัดใหม่นี้เป็นจุดแบ่งข้อความแต่ละรอบ (หัวข้อ 6.3.2.4)
+
+ข้อมูลถูกส่งผ่าน `Serial` ที่ขา 0/1 ซึ่งเป็นขาเดียวกับที่ใช้ต่อ USB จึงไม่ควรต่อ USB และ ESP32 พร้อมกัน นอกจากนี้ Uno ทำงานที่ 5 V แต่ขาของ ESP32 รับได้เพียง 3.3 V สายที่ส่งจาก Uno ไป ESP32 จึงต้องผ่านวงจรแบ่งแรงดันก่อน (ดู `PINS.md`)
 
 ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 2 เป็นรูปประกอบหัวข้อนี้
 
@@ -68,7 +263,7 @@ telemetry ที่ส่งต่อกันในผังนี้มีโ�
 
 #### 6.3.2.1 การเริ่มต้นระบบใน `setup()`
 
-เมื่อเปิดเครื่อง `setup()` จะเตรียมช่องทางสื่อสารก่อน แล้วจึงเริ่มเซนเซอร์บน I2C ทีละตัว
+เมื่อเปิดเครื่อง ESP32 ต้องเตรียมส่วนต่าง ๆ ให้พร้อมก่อนเริ่มทำงานจริง โดยเปิดช่องทางสื่อสารก่อน แสดงข้อความบนจอ แล้วจึงเริ่มเซนเซอร์ทีละตัว
 
 ```cpp
 Serial2.begin(UNO_LINK_BAUD, SERIAL_8N1, UNO_LINK_RX_PIN, UNO_LINK_TX_PIN);
@@ -88,11 +283,13 @@ for (int attempt = 0; attempt < 5 && !statusMpu; attempt++) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 875–887](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L875-L887)
 
-- `Serial2.begin(...)` เปิด UART ช่องที่ 2 สำหรับรับข้อมูลจาก Arduino Uno ที่ 9600 baud รูปแบบ 8N1 บนขา RX = GPIO16 และ TX = GPIO17
-- `Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN)` เปิด I2C bus ที่ SDA = GPIO21 และ SCL = GPIO22 (กำหนดใน `board_config.h`) ด้วย clock 100 kHz
-- เซนเซอร์แต่ละตัว (MPU, MAX30102, MLX90614) พยายามเริ่มต้นได้สูงสุด 5 ครั้ง ห่างกันครั้งละ 100 ms ผลลัพธ์เก็บไว้ในตัวแปร `statusMpu`, `statusMax` และ `statusMlx` ถ้าเซนเซอร์ตัวใดเริ่มไม่สำเร็จ ระบบยังทำงานต่อได้ แต่ค่าของเซนเซอร์นั้นจะเป็น 0
+ESP32 ใช้ช่องทางสื่อสาร 2 ช่อง ช่องแรกคือ UART สำหรับรับค่า EMG และ FSR จาก Arduino Uno (ขา GPIO16/17 ความเร็ว 9600 baud) ช่องที่สองคือ I2C bus (ขา SDA = GPIO21, SCL = GPIO22 ความเร็ว 100 kHz) ซึ่งเซนเซอร์ทั้งสามตัวและจอ LCD ใช้ร่วมกัน เมื่อเปิด I2C แล้ว จอ LCD จะขึ้นข้อความ `Booting...` ให้ผู้ใช้รู้ว่าเครื่องกำลังเริ่มระบบ
 
-จากนั้นจึงเชื่อมต่อ Wi-Fi และสร้างเครื่องมือของ FreeRTOS ที่ task ต่าง ๆ ใช้ร่วมกัน
+ตอนเพิ่งจ่ายไฟ เซนเซอร์บน I2C อาจยังไม่พร้อมตอบสนองทันที การสั่งเริ่มต้นเพียงครั้งเดียวจึงอาจล้มเหลวทั้งที่เซนเซอร์ไม่ได้เสีย เฟิร์มแวร์จึงลองเริ่มต้นเซนเซอร์แต่ละตัว (MPU, MAX30102, MLX90614) ซ้ำได้หลายครั้ง โดยเว้นช่วงให้เซนเซอร์ตั้งตัวครั้งละประมาณ 100 ms และหยุดลองทันทีที่เซนเซอร์ตอบกลับ หากลองครบ 5 ครั้งแล้วยังไม่สำเร็จ ระบบจะถือว่าเซนเซอร์ตัวนั้นใช้งานไม่ได้
+
+ระบบจะจำไว้ว่าเซนเซอร์ตัวใดพร้อมใช้งาน และในขั้นตอนอ่านค่า (หัวข้อ 6.3.2.5) จะอ่านเฉพาะเซนเซอร์ที่พร้อมเท่านั้น ดังนั้นถ้าเซนเซอร์ตัวใดหลุดหรือต่อสายไม่แน่น ระบบทั้งหมดจะไม่ค้าง ส่วนอื่นยังทำงานได้ตามปกติ เพียงแต่ค่าที่มาจากเซนเซอร์ตัวนั้นจะคงเป็น 0
+
+จากนั้นจึงเชื่อมต่อ Wi-Fi และสร้างเครื่องมือของ FreeRTOS ที่ task ต่าง ๆ ใช้ประสานงานกัน เครื่องมือเหล่านี้ต้องสร้างไว้ก่อนสร้าง task เพราะ task เริ่มทำงานทันทีที่ถูกสร้างและต้องใช้เครื่องมือเหล่านี้ตั้งแต่รอบแรก
 
 ```cpp
 stateMutex = xSemaphoreCreateMutex();
@@ -104,17 +301,19 @@ buttonEventQueue = xQueueCreate(8, sizeof(uint8_t));
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 926–930](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L926-L930)
 
-| ตัวแปร | ชนิด | หน้าที่ |
-|---|---|---|
-| `stateMutex` | Mutex | ป้องกันการอ่าน/เขียน `SharedState` พร้อมกันจากหลาย task |
-| `i2cMutex` | Mutex | ให้ใช้ I2C bus ได้ทีละ task |
-| `sampleTickSemaphore` | Binary semaphore | สัญญาณจาก hardware timer เพื่อปลุก SensorTask |
-| `emgQueue` | Queue 64 ช่อง | เก็บค่า EMG ทุกตัวอย่างไว้รอ NetworkTask ส่งเป็นชุด |
-| `buttonEventQueue` | Queue 8 ช่อง | ส่งหมายเลขปุ่มจาก interrupt ไปให้ ControlTask |
+เครื่องมือเหล่านี้แบ่งเป็น 2 กลุ่ม กลุ่มแรกคือ mutex ใช้เป็น "กุญแจ" ของสิ่งที่หลาย task ใช้ร่วมกัน task ที่ถือกุญแจอยู่เท่านั้นจึงจะเข้าใช้ได้ ส่วนกลุ่มที่สองคือ semaphore และ queue ใช้ส่งสัญญาณหรือส่งข้อมูลจากส่วนหนึ่งของโปรแกรมไปยังอีกส่วน
+
+| เครื่องมือ    | ชนิด          | ใช้ทำอะไร                                                                                                                   |
+| ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `stateMutex`          | Mutex             | กุญแจของข้อมูลกลาง`SharedState` ไม่ให้ task หนึ่งอ่านขณะที่อีก task กำลังเขียน |
+| `i2cMutex`            | Mutex             | กุญแจของ I2C bus ให้ใช้ได้ทีละ task                                                                             |
+| `sampleTickSemaphore` | Binary semaphore  | สัญญาณจาก hardware timer ที่ปลุก SensorTask ทุก 10 ms                                                             |
+| `emgQueue`            | Queue 64 ช่อง | ที่พักค่า EMG ทุกตัวอย่าง รอ NetworkTask มาเก็บไปส่งเป็นชุด                                  |
+| `buttonEventQueue`    | Queue 8 ช่อง  | ส่งหมายเลขปุ่มที่ถูกกดจาก interrupt ไปให้ ControlTask                                                  |
 
 #### 6.3.2.2 การแบ่งงานเป็น Task
 
-ESP32 แบ่งงานออกเป็น 4 Task ที่ทำงานพร้อมกัน โดยกำหนด stack, priority และ core ของแต่ละ task ด้วย `xTaskCreatePinnedToCore()`
+งานของ ESP32 แต่ละอย่างมีจังหวะเวลาต่างกัน การอ่านเซนเซอร์ต้องตรงทุก 10 ms แต่การส่ง HTTP อาจต้องรอเซิร์ฟเวอร์ตอบนานหลายร้อยมิลลิวินาที ถ้าเขียนทุกอย่างรวมไว้ในลูปเดียว การรอเครือข่ายจะทำให้การอ่านเซนเซอร์ช้าตามไปด้วย จึงแยกงานออกเป็น 4 task ที่มีลูปของตัวเอง และให้ FreeRTOS สลับเวลา CPU ให้แต่ละ task ตามความสำคัญ
 
 ```cpp
 xTaskCreatePinnedToCore(sensorTask, "SensorTask", 4096, nullptr, 3, &sensorTaskHandle, 1);
@@ -125,16 +324,18 @@ xTaskCreatePinnedToCore(controlTask, "ControlTask", 2560, nullptr, 2, &controlTa
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 953–956](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L953-L956)
 
-| Task | Stack (byte) | Priority | Core | หน้าที่ |
-|---|---|---|---|---|
-| `SensorTask` | 4096 | 3 (สูงสุด) | 1 | อ่านเซนเซอร์ทุก 10 ms ตาม hardware timer |
-| `NetworkTask` | 8192 | 2 | 0 | สร้าง JSON และส่ง HTTP POST ทุก 250 ms |
-| `LcdTask` | 2560 | 1 (ต่ำสุด) | 1 | อัปเดตจอ LCD ทุก 200 ms |
-| `ControlTask` | 2560 | 2 | 1 | รับเหตุการณ์ปุ่ม ควบคุม buzzer และเข้า light sleep |
+| Task            | Stack (byte) | Priority         | Core | หน้าที่                                                                  |
+| --------------- | ------------ | ---------------- | ---- | ------------------------------------------------------------------------------- |
+| `SensorTask`  | 4096         | 3 (สูงสุด) | 1    | อ่านเซนเซอร์ทุก 10 ms ตาม hardware timer                      |
+| `NetworkTask` | 8192         | 2                | 0    | สร้าง JSON และส่ง HTTP POST ทุก 250 ms                            |
+| `LcdTask`     | 2560         | 1 (ต่ำสุด) | 1    | อัปเดตจอ LCD ทุก 200 ms                                              |
+| `ControlTask` | 2560         | 2                | 1    | รับเหตุการณ์ปุ่ม ควบคุม buzzer และเข้า light sleep |
 
-SensorTask ได้ priority สูงสุดเพราะต้องอ่านข้อมูลให้ตรงรอบ ส่วน NetworkTask แยกไปอยู่ core 0 ซึ่งเป็น core เดียวกับ Wi-Fi stack ทำให้การรอ HTTP ที่อาจใช้เวลานานไม่ไปขวางการอ่านเซนเซอร์บน core 1 และ NetworkTask ใช้ stack มากที่สุดเพราะต้องสร้าง buffer ของ payload
+SensorTask ได้ priority สูงสุด เมื่อถึงรอบอ่านเซนเซอร์ FreeRTOS จะหยุด task อื่นบน core เดียวกันไว้ก่อนแล้วให้ SensorTask ทำงานทันที ส่วน LcdTask ได้ priority ต่ำสุด เพราะถ้าจออัปเดตช้าไปเล็กน้อยผู้ใช้ก็แทบไม่สังเกตเห็น
 
-เมื่อสร้าง task ครบแล้ว `loop()` ของ Arduino ไม่มีงานต้องทำ จึงลบ task ของตัวเองทิ้ง
+ESP32 มี CPU 2 core ระบบจึงแยก NetworkTask ไปไว้ที่ core 0 ซึ่งเป็น core เดียวกับที่ Wi-Fi ทำงาน ส่วน task อื่นอยู่ที่ core 1 ทำให้ขณะที่ NetworkTask รอเซิร์ฟเวอร์ตอบ การอ่านเซนเซอร์บนอีก core ยังเดินต่อได้ตามปกติ NetworkTask ได้ stack มากที่สุดเพราะต้องเก็บข้อความ JSON ทั้งก้อนไว้ในหน่วยความจำระหว่างสร้าง
+
+เมื่อสร้าง task ครบแล้ว งานทั้งหมดจะอยู่ใน task ทั้งสี่ `loop()` ของ Arduino จึงไม่เหลืองานให้ทำ และลบตัวเองทิ้งเพื่อคืนหน่วยความจำ
 
 ```cpp
 void loop() {
@@ -146,7 +347,7 @@ void loop() {
 
 #### 6.3.2.3 การจับเวลารอบ sampling ด้วย Hardware Timer
 
-ใช้ hardware timer สร้างสัญญาณที่ความถี่ 100 Hz ทุกครั้งที่ timer ทำงาน ระบบจะให้ semaphore เพื่อปลุก SensorTask ให้อ่านข้อมูลหนึ่งรอบ ทำให้รอบ sampling สม่ำเสมอ
+ถ้าใช้ `delay(10)` คั่นระหว่างรอบ เวลาแต่ละรอบจะเท่ากับ 10 ms บวกเวลาที่ใช้อ่านเซนเซอร์ ซึ่งไม่คงที่ รอบ sampling จึงคลาดเคลื่อนไปเรื่อย ๆ ระบบจึงใช้ hardware timer ซึ่งเป็นวงจรนับเวลาที่แยกจาก CPU และนับต่อไปได้ตรงเวลาไม่ว่า CPU จะทำอะไรอยู่
 
 ```cpp
 sampleTimer = timerBegin(1000000);
@@ -157,10 +358,9 @@ timerStart(sampleTimer);
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 948–951](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L948-L951)
 
-- `timerBegin(1000000)` ตั้ง timer ให้นับที่ 1 MHz หรือ 1 tick ต่อ 1 µs
-- `timerAlarm(...)` ตั้งให้เกิด alarm ทุก `SAMPLE_INTERVAL_MS * 1000` = 10 × 1000 = 10,000 tick หรือ 10 ms และเปิด auto-reload ให้ timer เริ่มนับใหม่เองทุกรอบ
+timer นับขึ้นหนึ่งครั้งทุก 1 µs เมื่อนับครบ 10,000 ครั้งหรือ 10 ms จะเกิด interrupt แล้วเริ่มนับใหม่เองโดยอัตโนมัติ จึงได้สัญญาณสม่ำเสมอที่ 100 Hz
 
-ฟังก์ชันที่ timer เรียกเมื่อครบรอบ (ISR) มีหน้าที่เพียงให้ semaphore
+เมื่อเกิด interrupt CPU จะหยุดงานที่ทำอยู่ชั่วคราวเพื่อไปทำฟังก์ชันด้านล่าง ฟังก์ชันนี้ไม่ได้อ่านเซนเซอร์เอง ทำเพียงส่งสัญญาณบอก SensorTask ว่าถึงรอบแล้ว เพราะงานใน interrupt ต้องสั้นที่สุด ส่วนการอ่านเซนเซอร์ผ่าน I2C ใช้เวลานานและต้องรอ mutex ซึ่งทำใน interrupt ไม่ได้
 
 ```cpp
 void IRAM_ATTR onSampleTimer() {
@@ -172,10 +372,9 @@ void IRAM_ATTR onSampleTimer() {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 237–241](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L237-L241)
 
-- `IRAM_ATTR` ให้ฟังก์ชันนี้อยู่ใน RAM ภายใน เพื่อให้เรียกได้ทันทีโดยไม่ต้องรออ่านจาก flash
-- `xSemaphoreGiveFromISR()` เป็นเวอร์ชันที่ใช้ใน interrupt ได้ ถ้าการให้ semaphore ทำให้ task ที่มี priority สูงกว่าตื่นขึ้น `portYIELD_FROM_ISR()` จะสลับไปทำ task นั้นทันทีหลังออกจาก interrupt
+ฟังก์ชันนี้ถูกวางไว้ใน RAM ภายใน (`IRAM_ATTR`) เพื่อให้เริ่มทำงานได้ทันทีโดยไม่ต้องรออ่านโค้ดจาก flash และหลังจากส่งสัญญาณแล้ว ถ้า SensorTask สำคัญกว่างานที่ถูกขัดจังหวะไว้ ระบบจะสลับไปทำ SensorTask ทันทีเมื่อออกจาก interrupt โดยไม่ต้องรอให้งานเดิมทำจนเสร็จ
 
-ฝั่ง SensorTask จะรอ semaphore นี้ที่ต้นลูปทุกรอบ
+ฝั่ง SensorTask จะหยุดรอสัญญาณนี้ที่ต้นลูปทุกรอบ
 
 ```cpp
 void sensorTask(void *pvParameters) {
@@ -193,11 +392,11 @@ void sensorTask(void *pvParameters) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 571–580](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L571-L580)
 
-`portMAX_DELAY` ทำให้ task หยุดรอโดยไม่ใช้ CPU จนกว่า timer จะให้ semaphore จึงได้รอบการอ่านทุก 10 ms ตาม hardware timer แทนการใช้ `delay()`
+ระหว่างรอ SensorTask ไม่ใช้ CPU เลย CPU จึงว่างไปทำ task อื่นได้ เมื่อได้รับสัญญาณ SensorTask จะรายงานตัวกับ watchdog (หัวข้อ 6.3.2.7) อ่านเซนเซอร์หนึ่งรอบ แล้ววนกลับมารอสัญญาณครั้งถัดไป รอบการอ่านจึงตรงทุก 10 ms ตามจังหวะของ hardware timer
 
 #### 6.3.2.4 การรับข้อมูลจาก Arduino Uno ผ่าน UART
 
-ESP32 รับค่า EMG และ FSR จาก Arduino Uno ผ่าน `Serial2` ที่ขา GPIO16/17 ด้วยความเร็ว 9600 baud Uno ส่งข้อความบรรทัดละหนึ่งรอบในรูปแบบ `emg,fsr\n` และ SensorTask เรียก `pollUnoLink()` ทุกรอบเพื่อแยกค่า
+Arduino Uno ส่งค่า EMG และ FSR มาเป็นข้อความบรรทัดละหนึ่งรอบในรูปแบบ `emg,fsr` เช่น `2048,1820` แต่ UART ส่งข้อมูลมาทีละตัวอักษร และในแต่ละรอบที่ SensorTask ตรวจ ข้อความหนึ่งบรรทัดอาจมาถึงไม่ครบ ฟังก์ชัน `pollUnoLink()` จึงสะสมตัวอักษรไว้จนครบบรรทัดก่อน แล้วจึงแปลงเป็นตัวเลข
 
 ```cpp
 void pollUnoLink() {
@@ -227,13 +426,13 @@ void pollUnoLink() {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 266–291](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L266-L291)
 
-1. อ่านตัวอักษรทีละตัวจาก buffer ของ UART และเก็บต่อท้ายใน `lineBuf` โดยข้าม `\r` และจำกัดความยาวไม่ให้เกิน buffer 32 ตัวอักษร
-2. เมื่อเจอ `\n` แสดงว่าจบหนึ่งบรรทัด จึงปิดท้ายสตริงด้วย `\0` แล้วใช้ `sscanf("%d,%d")` แยกเป็นตัวเลข 2 ค่า
-3. ถ้าแยกได้ครบ 2 ค่า จะบันทึกลง `unoEmgVal` และ `unoFsrForce` พร้อมเวลาที่รับได้ล่าสุด ถ้าบรรทัดเสียจะทิ้งไปทั้งบรรทัด
-4. `lineBuf` และ `lineLen` เป็น `static` จึงเก็บข้อความที่รับมายังไม่ครบบรรทัดไว้ต่อในรอบถัดไปได้
-5. ถ้าไม่ได้รับข้อมูลเกิน 500 ms ระบบจะถือว่าการเชื่อมต่อกับ Uno ขาด และพิมพ์แจ้งทาง Serial Monitor
+1. ทุกรอบ ฟังก์ชันจะรับตัวอักษรที่มาถึงแล้วทั้งหมด นำไปต่อท้ายข้อความที่สะสมไว้ ถ้าข้อความยาวผิดปกติเกิน 32 ตัวอักษรจะไม่เก็บเพิ่ม เพื่อไม่ให้ข้อมูลล้นพื้นที่ที่เตรียมไว้
+2. เมื่อเจอตัวขึ้นบรรทัดใหม่ แสดงว่าได้ข้อความครบหนึ่งรอบแล้ว จึงแยกข้อความตรงเครื่องหมายจุลภาคออกเป็นตัวเลข 2 ค่า
+3. ถ้าแยกได้ครบทั้ง 2 ค่า จะเก็บเป็นค่าล่าสุดของ EMG และ FSR พร้อมจดเวลาที่รับได้ แต่ถ้าบรรทัดเสีย เช่น มีตัวอักษรหายระหว่างทาง จะทิ้งบรรทัดนั้นไปทั้งบรรทัด ระบบจึงไม่นำค่าที่ผิดไปใช้
+4. ข้อความที่มายังไม่ครบบรรทัดจะถูกเก็บไว้ข้ามรอบ แล้วนำมาต่อกับตัวอักษรที่มาถึงในรอบถัดไป
+5. ปกติ Uno ส่งข้อมูลมาทุก 10 ms ถ้าไม่ได้รับข้อมูลเลยนานเกิน 500 ms ระบบจะถือว่าการเชื่อมต่อกับ Uno ขาด และแจ้งทาง Serial Monitor
 
-หลังได้ค่าจาก Uno แล้ว SensorTask ส่งค่า EMG เข้า `emgQueue` ทุกรอบ ถ้า queue เต็มจะทิ้งค่าที่เก่าที่สุดหนึ่งค่าแล้วใส่ค่าใหม่แทน ทำให้ข้อมูลที่ส่งออกไปเป็นค่าล่าสุดเสมอ
+ค่า EMG ต้องส่งขึ้นเว็บให้ครบทุกตัวอย่าง เพื่อให้หน้าเว็บวาดกราฟสัญญาณกล้ามเนื้อได้ต่อเนื่อง แต่ SensorTask ได้ค่าใหม่ทุก 10 ms ขณะที่ NetworkTask ส่งข้อมูลทุก 250 ms จึงต้องมีที่พักข้อมูลระหว่างกัน SensorTask จะใส่ค่า EMG ลง `emgQueue` ทุกรอบ แล้ว NetworkTask มาเก็บออกไปส่งทีเดียวทั้งชุด
 
 ```cpp
 if (xQueueSend(emgQueue, &emgVal, 0) != pdTRUE) {
@@ -245,9 +444,13 @@ if (xQueueSend(emgQueue, &emgVal, 0) != pdTRUE) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 587–591](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L587-L591)
 
+queue มี 64 ช่อง พอเก็บข้อมูลได้ประมาณ 640 ms ถ้าเครือข่ายช้าจน NetworkTask มาเก็บไม่ทันและ queue เต็ม ระบบจะทิ้งค่าที่เก่าที่สุดหนึ่งค่าเพื่อเปิดที่ให้ค่าใหม่ โดย SensorTask ไม่ต้องหยุดรอ ข้อมูลที่ส่งขึ้นเว็บจึงเป็นช่วงล่าสุดเสมอ
+
 #### 6.3.2.5 การใช้ I2C bus ร่วมกันด้วย Mutex
 
-เซนเซอร์ MPU, MAX30102, MLX90614 และจอ LCD ต่ออยู่บน I2C bus เดียวกัน เนื่องจาก bus นี้สื่อสารได้ทีละอุปกรณ์ จึงใช้ mutex ควบคุมไม่ให้หลาย task เข้าใช้ bus พร้อมกัน ซึ่งช่วยป้องกันข้อมูลชนกันและ bus ค้าง ใน SensorTask การอ่านเซนเซอร์ I2C ทั้งหมดอยู่ระหว่าง `xSemaphoreTake(i2cMutex)` และ `xSemaphoreGive(i2cMutex)`
+เซนเซอร์ MPU, MAX30102, MLX90614 และจอ LCD ต่ออยู่บน I2C bus สายเดียวกัน และ bus นี้สื่อสารได้ทีละอุปกรณ์ ถ้า SensorTask กำลังอ่านเซนเซอร์อยู่แล้ว LcdTask เข้ามาเขียนจอพร้อมกัน สัญญาณบนสายจะชนกัน ทำให้ได้ข้อมูลผิดหรือ bus ค้าง ระบบจึงใช้ `i2cMutex` เป็นกุญแจของ bus task ใดจะใช้ bus ต้องขอกุญแจก่อน และคืนเมื่อใช้เสร็จ
+
+ในหนึ่งรอบ SensorTask ขอกุญแจเพียงครั้งเดียว อ่านเซนเซอร์ทุกตัวที่ต้องอ่านให้เสร็จ แล้วจึงคืนกุญแจ
 
 ```cpp
 if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -279,12 +482,11 @@ if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 594–638](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L594-L638)
 
-- รอ mutex ได้ไม่เกิน 20 ms ถ้ายังไม่ได้ (เช่น LcdTask กำลังเขียนจออยู่) จะข้ามการอ่าน I2C ในรอบนั้นไป แทนที่จะรอค้าง
-- อ่าน MPU ทุกรอบ (10 ms) เพื่อคำนวณความเร็ว
-- ดึงข้อมูลทุกตัวที่ค้างอยู่ใน FIFO ของ MAX30102 จนหมดทุกรอบ เพื่อคำนวณ HR และ SpO2
-- อ่าน MLX90614 เพียงทุก 250 ms (`MLX_READ_INTERVAL_MS`) เพราะอุณหภูมิผิวเปลี่ยนช้า การอ่านถี่ ๆ จึงไม่จำเป็นและเสียเวลาบน bus
+- ถ้ารอกุญแจเกิน 20 ms แล้วยังไม่ได้ เช่น LcdTask กำลังเขียนจออยู่ SensorTask จะข้ามการอ่าน I2C ในรอบนั้นไปเลย เพื่อไม่ให้รอบ sampling ถัดไปเลื่อนออกไป
+- อ่านเฉพาะเซนเซอร์ที่เริ่มต้นสำเร็จตอนเปิดเครื่อง (หัวข้อ 6.3.2.1) เซนเซอร์ที่ใช้งานไม่ได้จะถูกข้ามไป
+- เซนเซอร์แต่ละตัวถูกอ่านในความถี่ที่ต่างกันตามลักษณะของข้อมูล MPU ถูกอ่านทุกรอบ (10 ms) เพราะความเร็วการเคลื่อนไหวเปลี่ยนเร็ว ส่วน MAX30102 เก็บค่าที่วัดได้ไว้ในหน่วยความจำของตัวเองอยู่แล้ว ทุกรอบระบบจึงดึงค่าที่ค้างอยู่ออกมาจนหมดเพื่อนำไปคำนวณ HR และ SpO2 ส่วน MLX90614 ถูกอ่านเพียงทุก 250 ms เพราะอุณหภูมิผิวเปลี่ยนช้า การอ่านถี่กว่านี้ไม่ได้ข้อมูลเพิ่มแต่เสียเวลาบน bus
 
-การอ่าน register ของ MPU ในระดับล่างใช้ `Wire` โดยตรง ตัวอย่างเช่นฟังก์ชันอ่าน register หนึ่งไบต์
+การอ่านค่าจาก MPU ในระดับล่างใช้ไลบรารี `Wire` โดยตรง ตัวอย่างเช่นฟังก์ชันอ่านค่าจาก register หนึ่งไบต์
 
 ```cpp
 uint8_t mpuReadReg(uint8_t reg) {
@@ -298,9 +500,9 @@ uint8_t mpuReadReg(uint8_t reg) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 293–299](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L293-L299)
 
-ขั้นตอนคือส่งหมายเลข register ไปยังอุปกรณ์ที่ address `0x68` แล้วใช้ `endTransmission(false)` เพื่อส่ง repeated start โดยยังไม่ปล่อย bus จากนั้นจึงขออ่านข้อมูลกลับ 1 ไบต์ ถ้าไม่มีข้อมูลตอบกลับจะคืนค่า `0xFF`
+การอ่านค่าผ่าน I2C ทำเป็น 2 จังหวะ จังหวะแรก ESP32 บอก MPU (address `0x68`) ว่าต้องการอ่าน register ใด จังหวะที่สองจึงขอข้อมูลกลับมา ระหว่างสองจังหวะนี้ ESP32 ยังไม่ปล่อย bus (repeated start) เพื่อไม่ให้อุปกรณ์อื่นแทรกเข้ามากลางคัน ถ้า MPU ไม่ตอบกลับ ฟังก์ชันจะคืนค่า `0xFF` แทน โปรแกรมจึงไม่ค้างรอ
 
-เมื่ออ่านเซนเซอร์เสร็จ SensorTask จะใช้ `stateMutex` คัดลอกค่าทั้งหมดลง `SharedState` เพื่อให้ task อื่นนำไปใช้ต่อ
+ค่าที่อ่านได้ยังอยู่ในตัวแปรของ SensorTask เอง ถ้าต้องการให้ task อื่นเห็น ต้องนำไปไว้ในข้อมูลกลาง `SharedState` การเขียนลง `SharedState` ต้องถือกุญแจ `stateMutex` ด้วย เพราะถ้า NetworkTask อ่านข้อมูลขณะที่ SensorTask เขียนไปได้เพียงครึ่งเดียว ค่าที่ได้จะเป็นค่าจากคนละรอบปนกัน
 
 ```cpp
 if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -318,9 +520,11 @@ if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 640–650](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L640-L650)
 
+นอกจากค่าล่าสุดแล้ว SensorTask ยังเก็บความเร็วสูงสุดที่เจอไว้ด้วย เพราะ NetworkTask ส่งข้อมูลทุก 250 ms ถ้าส่งเฉพาะค่าล่าสุด จังหวะที่ยกน้ำหนักเร็วที่สุดอาจเกิดขึ้นระหว่างรอบส่งแล้วหายไปโดยไม่ถูกส่ง
+
 #### 6.3.2.6 การรับสัญญาณจากปุ่มด้วย GPIO Interrupt
 
-ปุ่ม A (GPIO32) และปุ่ม B (GPIO33) ทำงานแบบ interrupt ใน `setup()` ตั้งค่าขาทั้งสองพร้อมกันด้วย `gpio_config()`
+ปุ่ม A (GPIO32) และปุ่ม B (GPIO33) ทำงานแบบ interrupt CPU จึงไม่ต้องคอยวนตรวจสถานะปุ่มตลอดเวลา เมื่อผู้ใช้กดปุ่ม ฮาร์ดแวร์จะแจ้ง CPU เอง ใน `setup()` ตั้งค่าขาของปุ่มทั้งสองพร้อมกัน
 
 ```cpp
 gpio_config_t buttonIoConf = {};
@@ -338,11 +542,9 @@ gpio_isr_handler_add((gpio_num_t)BUTTON_B_PIN, buttonB_isr, nullptr);
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 936–946](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L936-L946)
 
-- `BUTTON_PIN_BIT_MASK` คือ `(1ULL << 32) | (1ULL << 33)` เลือกขา GPIO32 และ GPIO33
-- เปิด pull-up ภายใน ขาจึงเป็น HIGH ตอนไม่กด และเป็น LOW ตอนกด
-- `GPIO_INTR_NEGEDGE` ให้เกิด interrupt ตอนสัญญาณเปลี่ยนจาก HIGH เป็น LOW หรือตอนเริ่มกดปุ่ม
+ขาของปุ่มเปิดตัวต้านทาน pull-up ภายในไว้ ขณะที่ไม่ได้กด ขาจึงเป็น HIGH และเมื่อกดปุ่ม ขาจะเปลี่ยนเป็น LOW ระบบตั้งให้เกิด interrupt ตอนสัญญาณเปลี่ยนจาก HIGH เป็น LOW ซึ่งก็คือจังหวะที่เริ่มกดปุ่ม แต่ละปุ่มมีฟังก์ชันรับ interrupt ของตัวเอง
 
-เมื่อกดปุ่ม ISR จะใช้ตัวจับเวลาระดับไมโครวินาทีทำ debounce 250 ms แล้วส่งหมายเลขปุ่มเข้าคิวของ ControlTask
+ปุ่มแบบกลไกมีปัญหาอย่างหนึ่ง เมื่อกดหนึ่งครั้ง หน้าสัมผัสจะเด้งกระทบกันหลายครั้งในเวลาสั้น ๆ ทำให้เกิด interrupt ซ้อนกันหลายครั้ง ฟังก์ชันรับ interrupt จึงต้องกรองสัญญาณเด้งเหล่านี้ออก (debounce)
 
 ```cpp
 void IRAM_ATTR buttonA_isr(void *arg) {
@@ -358,9 +560,9 @@ void IRAM_ATTR buttonA_isr(void *arg) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 246–254](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L246-L254)
 
-`esp_timer_get_time()` คืนเวลาเป็นไมโครวินาทีนับจากบูต ถ้า interrupt ครั้งนี้ห่างจากครั้งก่อนไม่ถึง `BUTTON_DEBOUNCE_US` (250,000 µs) จะถือว่าเป็นสัญญาณเด้งของหน้าสัมผัสปุ่มและไม่ส่งต่อ ส่วน `buttonB_isr()` ทำงานแบบเดียวกันแต่ส่งค่า `id = 1`
+ทุกครั้งที่เกิด interrupt ฟังก์ชันจะดูเวลาปัจจุบันแบบละเอียดระดับไมโครวินาที ถ้าห่างจากครั้งก่อนไม่ถึง 250 ms จะถือว่าเป็นสัญญาณเด้งและไม่สนใจ ถ้าห่างพอจะถือว่าเป็นการกดครั้งใหม่ แล้วส่งหมายเลขปุ่ม (A = 0, B = 1) เข้าคิวให้ ControlTask ฟังก์ชันนี้ไม่ได้เปลี่ยนสถานะการฝึกเอง เพราะการเปลี่ยนสถานะต้องรอกุญแจ `stateMutex` ซึ่งไม่ควรทำใน interrupt จึงส่งต่อให้ ControlTask จัดการแทน
 
-ControlTask รับหมายเลขปุ่มจากคิว แล้วตรวจสอบซ้ำอีกชั้นก่อนเปลี่ยนสถานะการฝึก
+ControlTask รับหมายเลขปุ่มจากคิว แล้วตรวจสอบอีกชั้นก่อนเปลี่ยนสถานะการฝึก
 
 ```cpp
 uint8_t buttonId;
@@ -394,16 +596,16 @@ if (xQueueReceive(buttonEventQueue, &buttonId, pdMS_TO_TICKS(100)) == pdTRUE && 
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 787–813](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L787-L813)
 
-1. รอ 30 ms (`BUTTON_SETTLE_MS`) ให้สัญญาณนิ่ง แล้วอ่านขาอีกครั้ง ถ้ายังเป็น LOW จึงถือว่ากดจริง
-2. `buttonArmed` ป้องกันการนับซ้ำขณะกดค้าง ปุ่มจะกลับมานับได้อีกเมื่อปล่อยปุ่มแล้ว (ขาเป็น HIGH) ซึ่งตรวจที่ต้นลูปของ ControlTask
-3. ปุ่ม A สลับระหว่างเริ่มเซตและพักเซต เมื่อเริ่มเซตใหม่จะเพิ่มจำนวนเซต ส่วนปุ่ม B หยุดการฝึกและรีเซ็ตจำนวนเซตเป็น 0
-4. ตั้ง `buttonAEventPending` หรือ `buttonBEventPending` ไว้ เพื่อให้ NetworkTask ส่งเหตุการณ์ปุ่มไปยังเว็บไซต์ในรอบถัดไป
+1. ControlTask รอ 30 ms ให้สัญญาณนิ่งก่อน แล้วอ่านสถานะปุ่มอีกครั้ง ถ้าปุ่มยังถูกกดอยู่จึงนับว่าเป็นการกดจริง ขั้นนี้ช่วยกรองสัญญาณรบกวนที่ทำให้เกิด interrupt ทั้งที่ผู้ใช้ไม่ได้กด
+2. ถ้าผู้ใช้กดปุ่มค้างไว้ ระบบจะนับเพียงครั้งเดียว และต้องปล่อยปุ่มก่อนจึงจะนับการกดครั้งถัดไปได้
+3. ปุ่ม A ใช้สลับระหว่างเริ่มเซตกับพักเซต ทุกครั้งที่เริ่มเซตใหม่ จำนวนเซตจะเพิ่มขึ้นหนึ่ง และระบบจะจดเวลาเริ่มเซตหรือเวลาเริ่มพักไว้ ส่วนปุ่ม B ใช้หยุดการฝึกและรีเซ็ตจำนวนเซตกลับเป็น 0
+4. ระบบทำเครื่องหมายไว้ว่ามีการกดปุ่มที่ยังไม่ได้แจ้งเว็บไซต์ NetworkTask จะเห็นเครื่องหมายนี้และส่งเหตุการณ์ไปในรอบถัดไป พร้อมกันนั้นระบบจะบันทึกเวลาที่มีการใช้งานล่าสุดไว้ สำหรับตัดสินใจว่าจะเข้า Sleep Mode เมื่อใด
 
 นอกจากนี้ ControlTask ยังรับหน้าที่ควบคุม buzzer ตามค่า FSR และตรวจเวลาที่ไม่มีการใช้งานเพื่อเข้า Sleep Mode (หัวข้อ 6.3.2.9)
 
 #### 6.3.2.7 การป้องกันระบบค้างด้วย Watchdog Timer
 
-ใช้ Task Watchdog Timer ของ ESP32 โดยตั้ง timeout ไว้ 8 วินาที (`WATCHDOG_TIMEOUT_S = 8`)
+watchdog เป็นตัวจับเวลาที่โปรแกรมต้องคอยรีเซ็ตเป็นระยะ ถ้าไม่มีการรีเซ็ตจนหมดเวลา แปลว่าโปรแกรมค้างอยู่ที่ใดที่หนึ่ง watchdog จะสั่งรีสตาร์ทบอร์ดให้กลับมาทำงานใหม่เอง ระบบตั้งเวลาไว้ 8 วินาที
 
 ```cpp
 void initWatchdog() {
@@ -420,9 +622,7 @@ void initWatchdog() {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 520–529](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L520-L529)
 
-- `trigger_panic = true` ทำให้ระบบ panic และรีสตาร์ทบอร์ดเมื่อ watchdog หมดเวลา
-- `idle_core_mask = 0` ไม่ได้ให้ watchdog เฝ้า idle task ของ core ใด แต่เฝ้าเฉพาะ task ที่ลงทะเบียนเอง
-- ESP32 Arduino core อาจเปิด watchdog ไว้ก่อนแล้ว ถ้า `esp_task_wdt_init()` ไม่สำเร็จจึงใช้ `esp_task_wdt_reconfigure()` เปลี่ยนค่าแทน
+เมื่อหมดเวลา watchdog จะทำให้ระบบ panic และรีสตาร์ทบอร์ด watchdog ตัวนี้เฝ้าเฉพาะ task ที่ระบบลงทะเบียนไว้เอง ไม่ได้เฝ้า task พื้นฐานของระบบ นอกจากนี้ ESP32 Arduino core อาจเปิด watchdog ไว้ก่อนแล้วตั้งแต่บูต ถ้าเปิดซ้ำไม่สำเร็จ ระบบจะเปลี่ยนค่าของ watchdog ที่เปิดอยู่ให้เป็นค่าที่ต้องการแทน
 
 หลังสร้าง task ครบ `setup()` จะลงทะเบียน task หลักทุกตัวไว้กับ watchdog
 
@@ -435,11 +635,11 @@ esp_task_wdt_add(controlTaskHandle);
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 958–961](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L958-L961)
 
-แต่ละ task เรียก `esp_task_wdt_reset()` ทุกรอบการทำงาน เช่นต้นลูปของ SensorTask, LcdTask และ ControlTask ส่วน NetworkTask เรียกทั้งต้นลูปและหลัง `http.POST()` เพราะการส่ง HTTP อาจใช้เวลานาน หาก task ใดไม่ตอบสนองนานเกิน 8 วินาที ระบบจะรีสตาร์ทบอร์ดโดยอัตโนมัติ
+watchdog ติดตามแยกเป็นราย task ทุก task ที่ลงทะเบียนต้องรายงานตัวภายใน 8 วินาที ถ้า task ใดค้าง แม้จะเป็นเพียงตัวเดียวและ task อื่นยังทำงานปกติ บอร์ดก็จะถูกรีสตาร์ท แต่ละ task จึงรายงานตัวที่ต้นลูปทุกรอบ ส่วน NetworkTask รายงานตัวอีกครั้งหลังส่ง HTTP เสร็จ เพราะรอบที่เครือข่ายช้าอาจใช้เวลารอนานหลายวินาที
 
 #### 6.3.2.8 การส่งข้อมูลขึ้นเว็บไซต์ใน NetworkTask
 
-NetworkTask นำค่าจาก Arduino Uno มารวมกับข้อมูลจากเซนเซอร์อื่นเป็น JSON ทุก 250 ms แล้วส่งไปยัง API `POST /api/telemetry` ของเว็บไซต์ ก่อนเริ่มลูป `setup()` เตรียม `HTTPClient` ไว้หนึ่งครั้ง
+NetworkTask นำค่าจาก Arduino Uno มารวมกับข้อมูลจากเซนเซอร์อื่นเป็น JSON ทุก 250 ms แล้วส่งไปยัง API `POST /api/telemetry` ของเว็บไซต์ ก่อนเริ่มส่ง ระบบเตรียมตัวส่ง HTTP ไว้หนึ่งครั้ง
 
 ```cpp
 void setupHttpClient() {
@@ -454,9 +654,9 @@ void setupHttpClient() {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 213–220](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L213-L220)
 
-`setReuse(true)` ให้ใช้การเชื่อมต่อ TCP เดิมซ้ำ (keep-alive) ไม่ต้องเปิดการเชื่อมต่อใหม่ทุก 250 ms และตั้ง timeout การเชื่อมต่อ 1.5 วินาที กับการรอคำตอบ 3 วินาที เพื่อไม่ให้ task รอนานจนชน watchdog
+การเปิดการเชื่อมต่อกับเซิร์ฟเวอร์ใหม่ทุกครั้งใช้เวลา ระบบจึงเปิดการเชื่อมต่อไว้ครั้งเดียวแล้วใช้ซ้ำทุกรอบ (keep-alive) และจำกัดเวลารอไว้ คือรอเชื่อมต่อได้ไม่เกิน 1.5 วินาที และรอคำตอบได้ไม่เกิน 3 วินาที เวลารอรวมจึงสั้นกว่า 8 วินาทีของ watchdog แม้เครือข่ายจะช้า บอร์ดก็จะไม่ถูกรีสตาร์ท
 
-ในแต่ละรอบ NetworkTask ทำงานดังนี้
+ในแต่ละรอบ NetworkTask เริ่มจากการรวบรวมค่า EMG
 
 ```cpp
 for (;;) {
@@ -484,11 +684,11 @@ for (;;) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 671–690](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L671-L690)
 
-1. `vTaskDelayUntil()` ทำให้ task ตื่นทุก 250 ms นับจากเวลาตื่นครั้งก่อน รอบการส่งจึงไม่เลื่อนออกไปตามเวลาที่ใช้ประมวลผล
-2. ถ้า Wi-Fi ยังไม่เชื่อมต่อ หรือส่งไม่สำเร็จติดกันครบ 3 ครั้งและยังไม่พ้นช่วงพัก 1 วินาที (backoff) จะข้ามรอบนี้ไป
-3. ดึงค่า EMG ทั้งหมดที่สะสมใน `emgQueue` ออกมาต่อกันเป็น JSON array เช่น `[512,530,498,...]` ที่ 100 Hz รอบละ 250 ms จะได้ประมาณ 25 ค่า โดยหยุดก่อน buffer 400 ตัวอักษรเต็ม
+1. NetworkTask ตื่นขึ้นทุก 250 ms โดยนับจากเวลาที่ตื่นครั้งก่อน ไม่ได้นับจากเวลาที่ทำงานเสร็จ รอบที่ใช้เวลาประมวลผลนานจึงไม่ทำให้รอบถัดไปเลื่อนออกไป
+2. ก่อนส่งจะตรวจว่าพร้อมส่งหรือไม่ ถ้า Wi-Fi ยังไม่เชื่อมต่อจะข้ามรอบนี้ไป และถ้าส่งไม่สำเร็จติดกันครบ 3 ครั้ง จะพักการส่งไว้ 1 วินาทีก่อนลองใหม่ (backoff)
+3. ดึงค่า EMG ที่สะสมอยู่ในคิวออกมาทั้งหมด แล้วเรียงต่อกันเป็นรายการ เช่น `[512,530,498,...]` ที่ 100 Hz ในรอบ 250 ms จะได้ประมาณ 25 ค่า ถ้ารายการยาวจนเกือบเต็มพื้นที่ 400 ตัวอักษรที่เตรียมไว้ จะหยุดดึงก่อน
 
-จากนั้นคัดลอก `SharedState` ทั้งก้อนออกมาภายใต้ `stateMutex` แล้วสร้าง payload
+จากนั้นคัดลอกข้อมูลกลางทั้งหมดออกมา แล้วประกอบเป็นข้อความ JSON
 
 ```cpp
 SharedState snap;
@@ -519,10 +719,10 @@ snprintf(payload, sizeof(payload),
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 692–715](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L692-L715)
 
-- การคัดลอกเป็น `snap` ทำให้ถือ mutex เพียงช่วงสั้น ๆ แล้วนำค่าไปสร้าง JSON นอก mutex ได้ SensorTask จึงไม่ต้องรอนาน
-- `peakVelocity` ถูกรีเซ็ตเป็นความเร็วปัจจุบันหลังคัดลอก จึงเป็นค่าสูงสุดของแต่ละรอบ 250 ms
-- สถานะปุ่มถูกล้างทันทีหลังคัดลอก เพื่อไม่ให้ส่งเหตุการณ์กดปุ่มเดิมซ้ำในรอบถัดไป
-- ใช้ `snprintf()` สร้าง JSON ลงใน buffer ขนาดคงที่ 768 ไบต์ โดยไม่ใช้ไลบรารี JSON จึงไม่ต้องจองหน่วยความจำเพิ่มระหว่างทำงาน
+- NetworkTask ถือกุญแจ `stateMutex` เพียงช่วงสั้น ๆ ที่คัดลอกข้อมูลออกมาเท่านั้น แล้วจึงคืนกุญแจก่อนสร้าง JSON ซึ่งใช้เวลานานกว่า SensorTask จึงไม่ต้องรอกุญแจนาน
+- หลังคัดลอก ความเร็วสูงสุดจะถูกตั้งกลับเป็นความเร็วปัจจุบัน เพื่อเริ่มจับค่าสูงสุดของรอบถัดไปใหม่ ค่าที่ส่งจึงเป็นความเร็วสูงสุดของแต่ละช่วง 250 ms
+- เครื่องหมายการกดปุ่มจะถูกล้างทันทีหลังคัดลอก เพื่อไม่ให้ส่งเหตุการณ์กดปุ่มเดิมซ้ำในรอบถัดไป
+- ข้อความ JSON ถูกสร้างลงในพื้นที่ขนาดคงที่ 768 ไบต์ที่เตรียมไว้ โดยไม่ใช้ไลบรารี JSON ระบบจึงไม่ต้องขอหน่วยความจำเพิ่มระหว่างทำงาน ซึ่งช่วยป้องกันหน่วยความจำไม่พอเมื่อเครื่องเปิดใช้งานนาน ๆ
 
 ตัวอย่าง payload ที่ได้
 
@@ -530,7 +730,7 @@ snprintf(payload, sizeof(payload),
 {"board":"esp32","emg":{"raw":[512,530,498]},"fsr":{"force":1820,"stability":92.5},"mpu":{"velocity":0.215,"peakVelocity":0.340},"vitals":{"hr":88,"spo2":97.5,"skinTemp":33.10,"deltaTemp":0.45},"buttons":{"a":false,"b":false}}
 ```
 
-สุดท้ายส่ง payload และจัดการผลลัพธ์
+สุดท้ายจึงส่งข้อมูลและจัดการผลลัพธ์
 
 ```cpp
 int code = http.POST(payload);
@@ -562,13 +762,13 @@ if (code > 0) {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 718–751](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L718-L751)
 
-- ถ้าส่งสำเร็จ (`code > 0`) จะรีเซ็ตตัวนับความผิดพลาด แล้วส่งคำตอบจากเซิร์ฟเวอร์ให้ `applyServerReply()` อ่านค่า calibration ของ FSR (`fsrZero`, `fsrMax`) และคำสั่งทดสอบ buzzer (`beep`) ที่ผู้ใช้ตั้งจากหน้าเว็บ
-- ถ้าส่งไม่สำเร็จ จะเตรียม `HTTPClient` ใหม่ และเมื่อผิดพลาดติดกันครบ 3 ครั้งจะพักการส่ง 1 วินาที เพื่อไม่ให้ส่งซ้ำถี่ ๆ ขณะเซิร์ฟเวอร์ติดต่อไม่ได้
-- เหตุการณ์ปุ่มที่ส่งไม่สำเร็จจะถูกคืนกลับเข้า `SharedState` เพื่อส่งอีกครั้งในรอบถัดไป เหตุการณ์กดปุ่มจึงไม่หายไประหว่างที่เครือข่ายมีปัญหา
+- ถ้าส่งสำเร็จ ตัวนับความผิดพลาดจะกลับเป็น 0 และระบบจะอ่านคำตอบจากเซิร์ฟเวอร์ ซึ่งมีค่า calibration ของ FSR (`fsrZero`, `fsrMax`) และคำสั่งทดสอบ buzzer (`beep`) ที่ผู้ใช้ตั้งไว้จากหน้าเว็บ ช่องทางนี้ทำให้หน้าเว็บส่งคำสั่งกลับมายังอุปกรณ์ได้โดยไม่ต้องเปิดการเชื่อมต่อแยก
+- ถ้าส่งไม่สำเร็จ ระบบจะเตรียมตัวส่ง HTTP ใหม่เผื่อการเชื่อมต่อเดิมเสีย และเมื่อผิดพลาดติดกันครบ 3 ครั้งจะพักการส่ง 1 วินาที เพื่อไม่ให้ส่งซ้ำถี่ ๆ ขณะที่เซิร์ฟเวอร์ติดต่อไม่ได้
+- ถ้ารอบที่ส่งไม่สำเร็จมีเหตุการณ์กดปุ่มอยู่ด้วย ระบบจะทำเครื่องหมายไว้ใหม่ให้ส่งอีกครั้งในรอบถัดไป ข้อมูลเซนเซอร์ที่หายไปหนึ่งรอบไม่ส่งผลมากนักเพราะรอบถัดไปก็มีค่าใหม่มาแทน แต่การกดปุ่มเปลี่ยนสถานะการฝึก จึงต้องไม่หายไประหว่างที่เครือข่ายมีปัญหา
 
 #### 6.3.2.9 การประหยัดพลังงานด้วย Light Sleep
 
-ControlTask ตรวจเวลาที่ไม่มีการใช้งาน ถ้าอยู่ในสถานะยังไม่เริ่มฝึก (ยังไม่เริ่มเซตแรก หรือกดปุ่ม B รีเซ็ตแล้ว) และไม่มีการกดปุ่มนานครบ 5 นาที (`IDLE_SLEEP_TIMEOUT_MS`) จะเรียก `enterLightSleepUntilWake()`
+ControlTask คอยตรวจว่าอุปกรณ์ถูกทิ้งไว้โดยไม่มีการใช้งานนานเท่าใด ถ้าอยู่ในสถานะที่ยังไม่เริ่มฝึก (ยังไม่เริ่มเซตแรก หรือกดปุ่ม B รีเซ็ตแล้ว) และไม่มีการกดปุ่มเลยนานครบ 5 นาที ระบบจะพาอุปกรณ์เข้าสู่ Light Sleep
 
 ```cpp
 void enterLightSleepUntilWake() {
@@ -603,11 +803,11 @@ void enterLightSleepUntilWake() {
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 531–569](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L531-L569)
 
-1. แสดงข้อความ `SLEEPING...` บน LCD และตัดการเชื่อมต่อ Wi-Fi
-2. ถอด task ทั้งหมดออกจาก watchdog และปิด watchdog ก่อน เพราะระหว่าง sleep ไม่มี task ใดเรียก `esp_task_wdt_reset()` ได้ ถ้าไม่ปิดไว้ บอร์ดจะถูกรีสตาร์ทหลังตื่น
-3. ตั้งแหล่งปลุก 2 แบบ คือ ext0 ที่ปุ่ม A (GPIO32 เป็น LOW หรือตอนกดปุ่ม) และ timer ที่ปลุกเมื่อครบ 5 วินาที (`IDLE_WAKE_KEEPALIVE_US`)
-4. `esp_light_sleep_start()` หยุด CPU ไว้ที่บรรทัดนี้จนกว่าจะถูกปลุก โดยค่าใน RAM ยังอยู่ครบ เมื่อตื่นแล้วจึงทำงานต่อจากบรรทัดถัดไปได้ทันที
-5. หลังตื่น เปิด watchdog และลงทะเบียน task ใหม่ แล้วเชื่อมต่อ Wi-Fi อีกครั้ง จากนั้น ControlTask ตั้ง `lastActivityMs` เป็นเวลาปัจจุบัน ระบบจึงเริ่มนับเวลาไม่มีการใช้งานใหม่อีก 5 นาทีก่อนเข้า sleep รอบถัดไป
+1. จอ LCD ขึ้นข้อความ `SLEEPING...` ให้ผู้ใช้รู้ว่าเครื่องกำลังจะพัก แล้วระบบตัดการเชื่อมต่อ Wi-Fi ซึ่งเป็นส่วนที่กินไฟมาก
+2. ระบบปิด watchdog ก่อน เพราะระหว่างที่ CPU หลับ ไม่มี task ใดรายงานตัวกับ watchdog ได้ ถ้าไม่ปิดไว้ watchdog จะเข้าใจว่า task ค้างและรีสตาร์ทบอร์ดทันทีที่ตื่น
+3. ระบบตั้งเหตุการณ์ที่จะปลุกเครื่องไว้ 2 แบบ แบบแรกคือการกดปุ่ม A ส่วนแบบที่สองคือ timer ที่ปลุกเครื่องเมื่อหลับครบ 5 วินาที
+4. จากนั้น CPU จะหยุดทำงานจนกว่าจะถูกปลุก ระหว่างนี้ข้อมูลในหน่วยความจำยังอยู่ครบ เมื่อตื่นขึ้นมา โปรแกรมจึงทำงานต่อจากจุดเดิมได้ทันทีโดยไม่ต้องบูตใหม่
+5. หลังตื่น ระบบเปิด watchdog และลงทะเบียน task ใหม่ แล้วเชื่อมต่อ Wi-Fi อีกครั้ง จากนั้นจึงเริ่มนับเวลาไม่มีการใช้งานใหม่ ต้องไม่มีการใช้งานอีก 5 นาทีจึงจะเข้า sleep รอบถัดไป
 
 ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 3 เป็นรูปประกอบหัวข้อนี้
 
