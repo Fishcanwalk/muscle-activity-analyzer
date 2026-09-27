@@ -21,6 +21,8 @@ backend/app/
 
 ผังนี้เป็นสรุปหน้าที่ของส่วนประกอบหลัก ไม่ได้รวมไฟล์ที่อยู่นอกขอบเขตแหล่งข้อมูลของรายงาน
 
+telemetry ที่ส่งต่อกันในผังนี้มีโครงสร้างหลักเป็นกลุ่ม `emg`, `fsr`, `mpu`, `vitals`, `device`, `timestamp` และอาจมี `buttons` โดย backend schema อนุญาตฟิลด์เพิ่มเติมเพื่อให้รองรับข้อมูลจากอุปกรณ์ได้ยืดหยุ่น
+
 ## 6.2 Arduino Uno: Timer1, ADC Interrupt, Watchdog และ UART
 
 เฟิร์มแวร์ `uno_emg_fsr_link.ino` ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ 100 Hz หรือทุก 10 ms เมื่อเกิด `TIMER1_COMPA_vect` จะตั้ง `FLAG_TIMER_TICK` ให้ loop เริ่มรอบอ่านใหม่

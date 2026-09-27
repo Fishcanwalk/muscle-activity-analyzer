@@ -22,7 +22,7 @@
   "timestamp": 0,
   "emg": {"raw": 0, "rms": 0, "mvcPercent": 0},
   "fsr": {"force": 0, "stability": 0},
-  "mpu": {"pitch": 0, "roll": 0, "velocity": 0},
+  "mpu": {"velocity": 0, "peakVelocity": 0},
   "vitals": {"hr": 0, "spo2": 0, "skinTemp": 0},
   "buttons": {"a": false, "b": false}
 }
