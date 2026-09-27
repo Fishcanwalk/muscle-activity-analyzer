@@ -1,4 +1,6 @@
-# 4.1 ภาษา เครื่องมือ และสภาพแวดล้อมที่ใช้พัฒนา
+# บทที่ 4 การพัฒนา
+
+## 4.1 ภาษา เครื่องมือ และสภาพแวดล้อมที่ใช้พัฒนา
 
 | ส่วน | ภาษา/เครื่องมือที่ปรากฏในแหล่งข้อมูล | หน้าที่ |
 |---|---|---|
@@ -34,4 +36,30 @@ README ระบุสภาพแวดล้อมหลักเป็น Pyt
 
 ข้อควรระวังคือ Uno ใช้ระดับสัญญาณ 5V แต่ GPIO ของ ESP32 รับได้ 3.3V จึงต้องผ่าน voltage divider ในทิศทาง Uno TX ไป ESP32 RX และต้องต่อกราวด์ร่วมกัน ส่วนเซนเซอร์ I2C ทั้งหมดใช้บัส SDA GPIO21 และ SCL GPIO22 ของ ESP32
 
-แหล่งข้อมูล: `README.md`, `backend/pyproject.toml`, `frontend/package.json`, โค้ด Arduino ทั้งสองโฟลเดอร์
+## 4.2 โครงสร้างซอฟต์แวร์และหน้าที่ของส่วนประกอบหลัก
+
+### เฟิร์มแวร์
+
+- `uno_emg_fsr_link/uno_emg_fsr_link.ino` — อ่าน EMG/FSR ด้วย ADC และส่ง UART
+- `uno_emg_fsr_link/board_config.h` — กำหนดขาและช่วง ADC ของบอร์ด
+- `esp32_workout_firmware/esp32_workout_firmware.ino` — รวมข้อมูลเซนเซอร์ จัดการ task, ปุ่ม, จอ, buzzer, Wi-Fi และ HTTP
+- `esp32_workout_firmware/board_config.h` — กำหนด mapping I2C/ADC แบบหลายสถาปัตยกรรม
+
+### เว็บและ API
+
+- `frontend/src/routes/api/telemetry` — รับ telemetry และเปิด SSE
+- `frontend/src/lib/server/telemetryStore.ts` — เก็บสถานะสด แปลงค่า และส่งต่อ backend
+- `frontend/src/lib/workout/` — state ของ workout, telemetry, camera, recording และ calibration
+- `backend/app/routers/` — endpoint authentication, telemetry, sessions, calibration และ users
+- `backend/app/models/` — schema ข้อมูลที่รับและส่ง
+- `backend/app/db.py` — client MongoDB และการสร้างดัชนี
+
+## 4.3 การพัฒนาฟังก์ชันหลักและการเชื่อมต่อระหว่างส่วนประกอบ
+
+การเชื่อมต่อเริ่มจาก UART ระหว่าง Uno กับ ESP32 โดย Uno ส่งข้อความหนึ่งบรรทัดต่อรอบอ่าน และ ESP32 อ่านจนพบ newline แล้ว parse เป็นจำนวนเต็มสองค่า จากนั้น ESP32 รวมกับข้อมูล I2C และสร้าง JSON telemetry
+
+Frontend route `/api/telemetry` รับ JSON และเรียก `ingestFullTelemetry()` เพื่ออัปเดตสถานะสด เมื่อมีข้อมูลใหม่จะ broadcast event `telemetry` ให้ browser และเรียก `forwardToBackend()` เพื่อส่งต่อไป FastAPI
+
+การปรับเทียบใช้ frontend route `/api/calibration` เป็น proxy ที่ตรวจสอบผู้ใช้ เรียก backend และอัปเดต cache ใน telemetry store ให้การแปลงหน่วยของข้อมูลสดใช้ค่าเดียวกับค่าที่บันทึกไว้ ส่วนผลเซตใช้ route ของ FastAPI ผ่าน client ที่สร้างใน frontend
+
+แหล่งข้อมูล: `README.md`, `backend/pyproject.toml`, `frontend/package.json`, โครงสร้างไฟล์ใน `backend/`, `frontend/` และสองโฟลเดอร์เฟิร์มแวร์, `frontend/src/routes/api/telemetry/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/routers/telemetry.py`, `backend/app/routers/calibration.py`, โค้ด Arduino ทั้งสองโฟลเดอร์
