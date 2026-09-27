@@ -199,7 +199,7 @@ ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16
 | LcdTask | 200 ms หรือ 5 Hz |
 | อ่าน MLX90614 | 250 ms |
 | debug log | 1 วินาที |
-| watchdog | 5 วินาที |
+| watchdog | 8 วินาที |
 
 ### 3.3 ตัวแปรสถานะ sensor
 
@@ -361,10 +361,7 @@ stability = 100 - ((hi - lo) / 200) * 100
 
 ### 3.14 `initWatchdog()`
 
-ฟังก์ชันนี้รองรับ ESP32 Arduino Core สองกลุ่ม
-
-- Core 3 ขึ้นไปใช้ `esp_task_wdt_config_t` และ timeout เป็น millisecond
-- Core 2 ใช้รูปแบบ `esp_task_wdt_init(timeout, true)`
+ฟังก์ชันนี้ใช้ `esp_task_wdt_config_t` ของ ESP32 Arduino Core 3 ตั้ง timeout เป็น millisecond (8 วินาที) และตั้ง `trigger_panic` ให้บอร์ดรีสตาร์ทเมื่อหมดเวลา โค้ดรองรับเฉพาะ Core 3 ขึ้นไป ถ้าคอมไพล์ด้วย Core ที่เก่ากว่าจะหยุดด้วย `#error`
 
 ถ้า watchdog ถูก initialize ไว้แล้วใน Core 3 จะเรียก `esp_task_wdt_reconfigure()` แทนการล้มเหลวทันที
 

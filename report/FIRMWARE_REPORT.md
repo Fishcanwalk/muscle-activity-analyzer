@@ -254,7 +254,7 @@ ESP32 ใช้ hardware timer เป็นจังหวะ sampling หลั
 
 ## 7. Watchdog และ Light Sleep บน ESP32
 
-ESP32 ตั้ง task watchdog timeout 5 วินาที และ subscribe ทั้ง 4 tasks โดยแต่ละ task เรียก `esp_task_wdt_reset()` ในรอบการทำงานของตัวเอง หาก task ใดค้างนานเกินกำหนด ระบบจะ panic และ reboot ตาม configuration ของ watchdog
+ESP32 ตั้ง task watchdog timeout 8 วินาที และ subscribe ทั้ง 4 tasks โดยแต่ละ task เรียก `esp_task_wdt_reset()` ในรอบการทำงานของตัวเอง หาก task ใดค้างนานเกินกำหนด ระบบจะ panic และ reboot ตาม configuration ของ watchdog
 
 เมื่อไม่มีการเริ่ม set หรือกดปุ่มนาน 5 นาที `ControlTask` จะเรียก `enterLightSleepUntilWake()` โดย:
 
