@@ -27,13 +27,13 @@ telemetry ที่ส่งต่อกันในผังนี้มีโ�
 
 ### 6.2.1 ภาพรวมการทำงาน
 
-**การจับเวลารอบ sampling:** ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ความถี่ 100 Hz หรือทุก 10 ms ทุกครั้งที่เกิด `TIMER1_COMPA_vect` ระบบจะตั้ง `FLAG_TIMER_TICK` เพื่อให้ loop เริ่มรอบอ่านข้อมูลใหม่ ทำให้รอบ sampling สม่ำเสมอ
+**การจับเวลารอบ sampling:** ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ความถี่ 100 Hz หรือทุก 10 ms ทุกครั้งที่เกิด `TIMER1_COMPA_vect` ระบบจะตั้งบิต 0 ของตัวแปร `eventFlags` เพื่อให้ loop เริ่มรอบอ่านข้อมูลใหม่ ทำให้รอบ sampling สม่ำเสมอ
 
 **การอ่านค่า ADC ด้วย interrupt:** ในแต่ละรอบ Uno อ่านค่า 2 ช่อง คือ EMG ที่ขา A0 และ FSR ที่ขา A1 โดยสั่งให้ ADC เริ่มแปลงค่าแล้วไม่ต้องรอ เมื่อแปลงค่าเสร็จ ADC จะเรียก interrupt ให้เก็บค่าไว้ แล้วเริ่มอ่านช่องถัดไปต่อทันที เมื่ออ่านครบทั้ง 2 ช่อง โปรแกรมหลักจะนำค่าไปใช้ ส่วนค่า FSR ต้องกลับด้านก่อน เพราะเซนเซอร์ให้ค่าสูงตอนไม่มีแรงกด
 
 **การประหยัดพลังงาน:** ช่วงที่รอ Timer1 หรือรอ ADC แปลงค่า CPU ไม่มีงานต้องทำ ระบบจึงให้ CPU พักด้วย `SLEEP_MODE_IDLE` และเมื่อเกิด interrupt จาก Timer1 หรือ ADC CPU จะตื่นขึ้นมาทำงานต่อ
 
-**การป้องกันระบบค้าง:** ใช้ Watchdog Timer ของ Uno โดยตั้ง timeout ไว้ 2 วินาที และเรียก `wdt_reset()` ทุกครั้งที่อ่านข้อมูลครบหนึ่งรอบ หากรอบการอ่านค้างนานเกิน 2 วินาที ระบบจะรีสตาร์ทบอร์ดโดยอัตโนมัติ
+**การป้องกันระบบค้าง:** ใช้ Watchdog Timer ของ Uno โดยตั้ง timeout ไว้ 2 วินาทีผ่านฟังก์ชันที่เขียนขึ้นเองระดับ register (`WDT__enable()`) ซึ่งให้ผลเหมือนฟังก์ชันสำเร็จรูปของไลบรารี AVR และเรียก `wdt_reset()` ทุกครั้งที่อ่านข้อมูลครบหนึ่งรอบ หากรอบการอ่านค้างนานเกิน 2 วินาที ระบบจะรีสตาร์ทบอร์ดโดยอัตโนมัติ
 
 **การส่งข้อมูลไปยัง ESP32:** แปลงค่า ADC 10-bit (0-1023) เป็นช่วง 0-4095 ด้วย `map()` ให้ตรงกับช่วงค่าที่ ESP32 และ backend ใช้ แล้วส่งผ่าน `Serial` ที่ขา 0/1 ด้วยความเร็ว 9600 baud ในรูปแบบ `emg,fsr` บรรทัดละหนึ่งรอบ
 
@@ -52,20 +52,21 @@ void setup() {
   MCUSR = 0;
   wdt_disable();
 
-  Serial.begin(ESP32_LINK_BAUD);
-  setupBoardAdc();
+  Serial.begin(9600);
   setupSampleTimer();
-  setupAdc();
+  ADMUX = (1 << REFS0) | ADC_CHANNEL_EMG;
+  ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+  DIDR0 |= (1 << ADC0D) | (1 << ADC1D);
 
   set_sleep_mode(SLEEP_MODE_IDLE);
 
-  wdt_enable(WDTO_2S);
+  WDT__enable(wdt_timeout_2sec);
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 88–105](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L88-L105)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 68–81](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L68-L81)
 
-ขั้นแรกระบบปิด watchdog ไว้ก่อนชั่วคราว เหตุผลอธิบายไว้ในหัวข้อ 6.2.2.5 ต่อมาจึงเปิด `Serial` ที่ความเร็ว 9600 baud เพื่อใช้ส่งข้อมูลไปยัง ESP32 แล้วตั้งค่า Timer1 (หัวข้อ 6.2.2.2) และ ADC (หัวข้อ 6.2.2.3) ส่วน `setupBoardAdc()` มาจาก `board_config.h` ซึ่งใช้ร่วมกันหลายบอร์ด บน Uno ฟังก์ชันนี้ไม่ได้ทำอะไร แต่เก็บไว้ให้โครงสร้างโค้ดเหมือนกับฝั่ง ESP32
+ขั้นแรกระบบปิด watchdog ไว้ก่อนชั่วคราว เหตุผลอธิบายไว้ในหัวข้อ 6.2.2.5 ต่อมาจึงเปิด `Serial` ที่ความเร็ว 9600 baud เพื่อใช้ส่งข้อมูลไปยัง ESP32 แล้วตั้งค่า Timer1 (หัวข้อ 6.2.2.2) จากนั้นตั้งค่า ADC ต่อทันทีในบรรทัดถัดมา (หัวข้อ 6.2.2.3) โดยไม่ได้แยกเป็นฟังก์ชันต่างหาก ไฟล์นี้ไม่ได้รวม `board_config.h` เหมือนก่อนหน้านี้อีกต่อไป จึงไม่มีการเรียก `setupBoardAdc()` และประกาศ `ADC_MAX_VAL` (10-bit, ค่า 1023) ไว้เองในไฟล์แทนการดึงจากเฮดเดอร์ที่ใช้ร่วมกับบอร์ดอื่น
 
 หลังจากนั้นระบบเลือกโหมดพักของ CPU ไว้ล่วงหน้า (หัวข้อ 6.2.2.4) และเปิด watchdog เป็นขั้นสุดท้าย เพราะเมื่อเปิดแล้วระบบต้องเริ่มรีเซ็ต watchdog เป็นระยะ ถ้าเปิดไว้ตั้งแต่ต้น ช่วงที่ยังตั้งค่าไม่เสร็จอาจทำให้บอร์ดถูกรีสตาร์ทโดยไม่จำเป็น
 
@@ -89,11 +90,11 @@ void setupSampleTimer() {
 }
 
 ISR(TIMER1_COMPA_vect) {
-  eventFlags |= FLAG_TIMER_TICK;
+  eventFlags |= (1 << 0);
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 41–57](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L41-L57)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 18–34](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L18-L34)
 
 ชิปทำงานที่ 16 MHz ซึ่งเร็วเกินกว่าจะนำมานับตรง ๆ จึงหารความถี่ด้วย 64 (prescaler) ก่อน timer จึงนับขึ้นหนึ่งครั้งทุก 4 µs เมื่อนับครบ 2,500 ครั้งก็จะได้ 10 ms พอดี ค่าที่ตั้งไว้คือ 2,499 เพราะ timer เริ่มนับจาก 0
 
@@ -102,53 +103,48 @@ timer ทำงานในโหมด CTC เมื่อนับถึงค
 เมื่อเกิด interrupt ฟังก์ชันที่รับ interrupt ทำเพียงอย่างเดียว คือ "ยกธง" บอกโปรแกรมหลักว่าถึงรอบแล้ว ส่วนงานอ่านค่าจริงจะทำใน `loop()` เพราะงานใน interrupt ต้องสั้นที่สุด ธงที่ใช้สื่อสารระหว่าง interrupt กับโปรแกรมหลักเก็บรวมไว้ในตัวแปรเดียว แต่ละบิตแทนเหตุการณ์หนึ่งอย่าง
 
 ```cpp
-#define FLAG_TIMER_TICK (1 << 0)
-#define FLAG_EMG_READY  (1 << 1)
-#define FLAG_FSR_READY  (1 << 2)
 volatile uint8_t eventFlags = 0;
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 21–24](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L21-L24)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 6](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L6)
 
-interrupt เป็นฝ่ายยกธง และ `loop()` เป็นฝ่ายเอาธงลงเมื่อจัดการเหตุการณ์นั้นเสร็จแล้ว ตัวแปรนี้ประกาศเป็น `volatile` เพื่อบอกคอมไพเลอร์ว่าค่าอาจถูกเปลี่ยนจาก interrupt ได้ทุกเมื่อ โปรแกรมจึงต้องอ่านค่าจริงจากหน่วยความจำทุกครั้ง ไม่ใช้ค่าเก่าที่จำไว้
+โค้ดนี้ไม่ได้ตั้งชื่อบิตแต่ละตัวไว้เป็นค่าคงที่ แต่ใช้ตัวเลขบิตตรง ๆ คือ บิต 0 (`1 << 0`) หมายถึง timer ครบรอบ บิต 1 (`1 << 1`) หมายถึง EMG แปลงค่าเสร็จ และบิต 2 (`1 << 2`) หมายถึง FSR แปลงค่าเสร็จ interrupt เป็นฝ่ายยกธงด้วยการ OR บิตที่เกี่ยวข้องเข้าไปในตัวแปร และ `loop()` เป็นฝ่ายเอาธงลงด้วยการ AND กับส่วนกลับบิตนั้นเมื่อจัดการเหตุการณ์นั้นเสร็จแล้ว ตัวแปรนี้ประกาศเป็น `volatile` เพื่อบอกคอมไพเลอร์ว่าค่าอาจถูกเปลี่ยนจาก interrupt ได้ทุกเมื่อ โปรแกรมจึงต้องอ่านค่าจริงจากหน่วยความจำทุกครั้ง ไม่ใช้ค่าเก่าที่จำไว้
 
 #### 6.2.2.3 การอ่านค่า ADC ด้วย Interrupt
 
 ถ้าใช้ `analogRead()` CPU ต้องรอ ADC แปลงค่าจนเสร็จ ซึ่งใช้เวลาประมาณ 104 µs ต่อช่อง โดยตลอดเวลานั้น CPU ต้องตื่นอยู่และทำอย่างอื่นไม่ได้ ระบบจึงใช้วิธีสั่งให้ ADC เริ่มแปลงค่าแล้วปล่อยไว้ เมื่อแปลงเสร็จ ADC จะแจ้งกลับมาเองด้วย interrupt
 
 ```cpp
-void setupAdc() {
-  ADMUX = (1 << REFS0) | ADC_CHANNEL_EMG;
-  ADCSRA = (1 << ADEN) | (1 << ADIE) |
-           (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
-  DIDR0 |= (1 << ADC0D) | (1 << ADC1D);
-}
+ADMUX = (1 << REFS0) | ADC_CHANNEL_EMG;
+ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+DIDR0 |= (1 << ADC0D) | (1 << ADC1D);
+```
 
-void startAdcConversion(uint8_t channel) {
-  currentAdcChannel = channel;
-  ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
-  ADCSRA |= (1 << ADSC);
-}
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 74–76](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L74-L76)
 
+```cpp
 ISR(ADC_vect) {
   int value = ADC;
   if (currentAdcChannel == ADC_CHANNEL_EMG) {
     emgRawIsr = value;
-    eventFlags |= FLAG_EMG_READY;
-    startAdcConversion(ADC_CHANNEL_FSR);
+    eventFlags |= (1 << 1);
+    currentAdcChannel = ADC_CHANNEL_FSR;
+    ADMUX = (ADMUX & 0xF0) | (ADC_CHANNEL_FSR & 0x0F);
+    ADCSRA |= (1 << ADSC);
   } else {
     fsrRawIsr = value;
-    eventFlags |= FLAG_FSR_READY;
+    eventFlags |= (1 << 2);
   }
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 63–86](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L63-L86)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 37–49](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L37-L49)
 
 - ตอนตั้งค่า ADC ระบบใช้แรงดัน 5 V ของบอร์ดเป็นแรงดันอ้างอิง ค่าที่อ่านได้จึงอยู่ในช่วง 0–1023 ตามแรงดัน 0–5 V และเปิดให้ ADC แจ้ง interrupt เมื่อแปลงค่าเสร็จ ส่วนสัญญาณนาฬิกาของ ADC ลดลงเหลือประมาณ 125 kHz ซึ่งอยู่ในช่วงที่ ADC แปลงค่าได้แม่นยำ
 - ขา A0 และ A1 ใช้อ่านสัญญาณแอนะล็อกเท่านั้น ระบบจึงปิดวงจรอ่านค่าดิจิทัลของสองขานี้ไว้ เพื่อลดสัญญาณรบกวนและลดการใช้ไฟ
-- ADC มีตัวเดียว แต่ต้องอ่าน 2 ช่อง ระบบจึงอ่านต่อกันเป็นทอด ๆ เริ่มจาก EMG ที่ขา A0 เมื่อแปลงเสร็จ interrupt จะเก็บค่าไว้ ยกธงว่า EMG พร้อมแล้ว และสั่งให้เริ่มอ่าน FSR ที่ขา A1 ต่อทันที เมื่อ FSR แปลงเสร็จก็จะยกธงว่า FSR พร้อมแล้ว ธงนี้หมายความว่าได้ค่าครบทั้งสองช่องของรอบนั้นแล้ว
-- interrupt ต้องรู้ว่าค่าที่เพิ่งแปลงเสร็จเป็นของช่องใด ระบบจึงจดช่องที่กำลังอ่านไว้ทุกครั้งที่สั่งเริ่มแปลงค่า
+- ADC มีตัวเดียว แต่ต้องอ่าน 2 ช่อง ระบบจึงอ่านต่อกันเป็นทอด ๆ เริ่มจาก EMG ที่ขา A0 เมื่อแปลงเสร็จ interrupt จะเก็บค่าไว้ ยกธงบิต 1 ว่า EMG พร้อมแล้ว แล้วเปลี่ยนช่องที่จะอ่านเป็น FSR ด้วยการเขียน `ADMUX` ใหม่ และสั่งเริ่มแปลงค่าอีกครั้งด้วยการตั้งบิต `ADSC` ตรง ๆ ในบรรทัดถัดมา เมื่อ FSR แปลงเสร็จก็จะยกธงบิต 2 ว่า FSR พร้อมแล้ว ธงนี้หมายความว่าได้ค่าครบทั้งสองช่องของรอบนั้นแล้ว
+- interrupt ต้องรู้ว่าค่าที่เพิ่งแปลงเสร็จเป็นของช่องใด ระบบจึงจดช่องที่กำลังอ่านไว้ในตัวแปร `currentAdcChannel` ทุกครั้งที่เปลี่ยนช่อง
+- โค้ดนี้ไม่มีฟังก์ชันช่วยรวมการตั้งช่องกับการสั่งเริ่มแปลงค่าไว้ด้วยกัน (เช่น `startAdcConversion()`) การเขียน `currentAdcChannel`, `ADMUX` และบิต `ADSC` จึงเกิดขึ้นตรง ๆ ทั้งใน ISR นี้ และใน `loop()` (หัวข้อ 6.2.2.4) แยกกันคนละที่ ทำให้เห็นการเข้าถึง register ระดับล่างชัดเจนขึ้น แต่ต้องเขียนโค้ดชุดเดียวกันซ้ำสองจุด
 
 #### 6.2.2.4 รอบการทำงานใน `loop()` และการประหยัดพลังงาน
 
@@ -158,13 +154,15 @@ ISR(ADC_vect) {
 void loop() {
   sleep_mode();
 
-  if (!(eventFlags & FLAG_TIMER_TICK)) return;
-  eventFlags &= ~FLAG_TIMER_TICK;
+  if (!(eventFlags & (1 << 0))) return;
+  eventFlags &= ~(1 << 0);
 
-  startAdcConversion(ADC_CHANNEL_EMG);
+  currentAdcChannel = ADC_CHANNEL_EMG;
+  ADMUX = (ADMUX & 0xF0) | (ADC_CHANNEL_EMG & 0x0F);
+  ADCSRA |= (1 << ADSC);
 
-  while (!(eventFlags & FLAG_FSR_READY)) sleep_mode();
-  eventFlags &= ~(FLAG_EMG_READY | FLAG_FSR_READY);
+  while (!(eventFlags & (1 << 2))) sleep_mode();
+  eventFlags &= ~((1 << 1) | (1 << 2));
 
   cli();
   int emgRaw = emgRawIsr;
@@ -174,11 +172,11 @@ void loop() {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 107–123](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L107-L123)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 83–99](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L83-L99)
 
 1. ต้นรอบ CPU จะพักจนกว่าจะมี interrupt ใดก็ตามเกิดขึ้น
-2. เมื่อตื่นขึ้น โปรแกรมจะตรวจก่อนว่าธงของ timer ถูกยกหรือไม่ เพราะ interrupt อื่นก็ปลุก CPU ได้เช่นกัน ถ้ายังไม่ถึงรอบก็กลับไปพักต่อ ถ้าถึงรอบแล้วจึงเอาธงลงและเริ่มทำงาน
-3. โปรแกรมสั่งเริ่มอ่าน EMG แล้วพักรอต่อ ระหว่างนั้น interrupt ของ ADC จะอ่าน EMG แล้วต่อด้วย FSR เอง (หัวข้อ 6.2.2.3) CPU จะตื่นขึ้นมาตรวจทุกครั้งที่มี interrupt จนกว่าจะเห็นธงว่า FSR พร้อมแล้ว
+2. เมื่อตื่นขึ้น โปรแกรมจะตรวจก่อนว่าบิตของ timer (บิต 0) ถูกยกหรือไม่ เพราะ interrupt อื่นก็ปลุก CPU ได้เช่นกัน ถ้ายังไม่ถึงรอบก็กลับไปพักต่อ ถ้าถึงรอบแล้วจึงเอาบิตลงและเริ่มทำงาน
+3. โปรแกรมตั้งช่อง ADC เป็น EMG และสั่งเริ่มแปลงค่าเองตรง ๆ (เขียน `currentAdcChannel`, `ADMUX` และบิต `ADSC`) แล้วพักรอต่อ ระหว่างนั้น interrupt ของ ADC จะอ่าน EMG แล้วต่อด้วย FSR เอง (หัวข้อ 6.2.2.3) CPU จะตื่นขึ้นมาตรวจทุกครั้งที่มี interrupt จนกว่าจะเห็นบิต FSR (บิต 2) พร้อมแล้ว
 4. เมื่อได้ค่าครบ โปรแกรมคัดลอกค่าจากตัวแปรที่ interrupt เขียนไว้มาใช้ ระหว่างคัดลอกจะปิด interrupt ไว้ชั่วครู่ เพราะ Uno เป็นชิป 8 บิต การอ่านค่า 16 บิตต้องทำเป็น 2 ครั้ง ถ้า interrupt แทรกเข้ามาเปลี่ยนค่าระหว่างสองครั้งนั้น ค่าที่ได้จะผิด
 
 โหมดพักที่เลือกไว้ใน `setup()` คือ `SLEEP_MODE_IDLE` ซึ่งเป็นโหมดที่ตื้นที่สุด โหมดนี้หยุดเฉพาะ CPU แต่ Timer1, ADC และ Serial ยังทำงานต่อได้และปลุก CPU ได้ ระบบไม่เลือกโหมดที่ลึกกว่านี้ เพราะโหมดเหล่านั้นจะหยุด timer และ ADC ซึ่งเฟิร์มแวร์ต้องใช้ ข้อดีอีกข้อของการพักขณะ ADC แปลงค่าคือสัญญาณรบกวนจากวงจรดิจิทัลลดลง ค่าที่อ่านได้จึงนิ่งขึ้น
@@ -191,20 +189,50 @@ watchdog ของ Uno ทำงานแบบเดียวกับฝั่
 MCUSR = 0;
 wdt_disable();
 // ...
-wdt_enable(WDTO_2S);
+WDT__enable(wdt_timeout_2sec);
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 92–104](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L92-L104)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 69–70, 80](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L68-L81)
 
 ต้น `setup()` ระบบล้างบันทึกสาเหตุการรีเซ็ตครั้งก่อน และปิด watchdog ไว้ก่อน เพราะถ้าบอร์ดเพิ่งถูกรีสตาร์ทจาก watchdog ชิปจะยังจำสถานะนั้นไว้ และ bootloader รุ่นเก่าบางรุ่นไม่ได้ล้างสถานะนี้ให้ ถ้าไม่จัดการเอง watchdog อาจทำงานต่อระหว่างที่บอร์ดกำลังเริ่มระบบ และรีสตาร์ทบอร์ดวนซ้ำไม่จบ
 
-เมื่อตั้งค่าส่วนอื่นเสร็จ ระบบจึงเปิด watchdog ด้วยเวลา 2 วินาที และรีเซ็ต watchdog หนึ่งครั้งที่ท้าย `loop()` ทุกครั้งที่อ่านและส่งข้อมูลครบหนึ่งรอบ
+ต่างจากฝั่ง ESP32 ที่เรียกใช้ watchdog ผ่านฟังก์ชันสำเร็จรูปของไลบรารี โค้ดฝั่ง Uno เขียนฟังก์ชันเปิด watchdog เองชื่อ `WDT__enable()` ซึ่งเขียนค่าลง register ของชิปโดยตรง แทนการเรียก `wdt_enable(WDTO_2S)` ของไลบรารี AVR
+
+```cpp
+#define wdt_timeout_2sec 7
+
+void WDT__enable(uint8_t timeout_v) {
+  unsigned char bakSREG;
+  uint8_t prescaler;
+  prescaler = timeout_v & 0x07;
+  prescaler |= (1 << WDE);
+  if (timeout_v > 7) {
+    prescaler |= (1 << WDP3);
+  }
+  bakSREG = SREG;
+  cli();
+  wdt_reset();
+  WDTCSR |= ((1 << WDCE) | (1 << WDE));
+  WDTCSR = prescaler;
+  SREG = bakSREG;
+}
+```
+
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 17, 52–66](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L52-L66)
+
+1. คำนวณค่า prescaler จากค่าที่ส่งเข้ามา (`timeout_v & 0x07`) แล้วตั้งบิต `WDE` (Watchdog Enable) เพิ่มเข้าไป ถ้าค่าที่ส่งมากกว่า 7 จะตั้งบิต `WDP3` เพิ่มด้วย สำหรับ timeout ที่นานกว่า 2 วินาที ค่าคงที่ `wdt_timeout_2sec` ที่ประกาศไว้เท่ากับ 7 ซึ่งตรงกับค่า `WDTO_2S` ของไลบรารี AVR พอดี ผลลัพธ์คือ timeout 2 วินาทีเท่าเดิม
+2. เก็บค่า `SREG` (สถานะ interrupt) ไว้ก่อน แล้วปิด interrupt ชั่วคราวด้วย `cli()` เพราะการตั้งค่า watchdog ต้องทำติดกันโดยไม่ให้ interrupt แทรก
+3. รีเซ็ต watchdog หนึ่งครั้งก่อนตั้งค่าใหม่ เพื่อไม่ให้ timeout เดิมหมดเวลาพอดีตอนกำลังตั้งค่า
+4. เขียน `WDTCSR` สองครั้งตามลำดับที่ชิป AVR กำหนด ครั้งแรกตั้งบิต `WDCE` และ `WDE` เพื่อปลดล็อกการเปลี่ยนค่า (ชิปกำหนดว่าไบต์นี้ต้องเขียนสองครั้งภายใน 4 clock cycle มิฉะนั้นการเปลี่ยนค่าจะไม่มีผล) ครั้งที่สองจึงเขียนค่า prescaler ที่คำนวณไว้ลงไปจริง
+5. คืนค่า `SREG` เดิม เพื่อให้สถานะ interrupt กลับมาเหมือนก่อนเรียกฟังก์ชัน
+
+เมื่อตั้งค่าส่วนอื่นเสร็จ ระบบจึงเรียก `WDT__enable(wdt_timeout_2sec)` ซึ่งให้ผลเหมือนกับ `wdt_enable(WDTO_2S)` ทุกประการ แล้วรีเซ็ต watchdog หนึ่งครั้งที่ท้าย `loop()` ทุกครั้งที่อ่านและส่งข้อมูลครบหนึ่งรอบ
 
 ```cpp
 wdt_reset();
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 136](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L136)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 109](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L109)
 
 ปกติหนึ่งรอบใช้เวลาประมาณ 10 ms เวลา 2 วินาทีจึงเผื่อไว้มาก watchdog จะทำงานเฉพาะเมื่อมีปัญหาจริง เช่น ADC ไม่แจ้งว่าแปลงเสร็จจนโปรแกรมรอธงอยู่ตลอดไป หรือ timer หยุดทำงาน
 
@@ -222,7 +250,7 @@ Serial.print(',');
 Serial.println(fsrScaled);
 ```
 
-ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 128–134](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L128-L134)
+ดูโค้ดต้นฉบับ: [`uno_emg_fsr_link.ino` บรรทัด 101–107](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/main/test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino#L101-L107)
 
 - วงจร FSR ให้ค่าสูงเมื่อไม่มีแรงกด และค่าจะลดลงเมื่อกดแรงขึ้น ซึ่งกลับด้านกับความหมายที่ต้องการ ระบบจึงกลับค่าก่อน ให้ค่ามากหมายถึงแรงกดมาก
 - ADC ของ Uno ให้ค่า 10 บิต (0–1023) แต่ฝั่ง ESP32 และ backend ออกแบบไว้สำหรับค่า 12 บิต (0–4095) ระบบจึงขยายช่วงค่าให้ตรงกัน เพื่อให้ส่วนอื่นของระบบใช้ค่าได้โดยไม่ต้องรู้ว่าข้อมูลมาจากบอร์ดใด
@@ -835,4 +863,4 @@ FastAPI สร้าง index ตอนเริ่มแอปและใช�
 
 ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 1 เป็นรูปสรุปเส้นทางข้อมูล และ Flowchart 2-3 เป็นรายละเอียดฝั่งไมโครคอนโทรลเลอร์
 
-แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/uno_emg_fsr_link/board_config.h`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`
+แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`
