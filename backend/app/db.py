@@ -2,7 +2,9 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.config import settings
 
-client: AsyncIOMotorClient = AsyncIOMotorClient(settings.MONGO_URI)
+# tz_aware: datetimes come back as UTC-aware, so the API serializes them with an offset
+# ("...+00:00"). Naive ones were read as local time by the browser -- a day off in Thailand.
+client: AsyncIOMotorClient = AsyncIOMotorClient(settings.MONGO_URI, tz_aware=True)
 database: AsyncIOMotorDatabase = client.get_default_database()
 
 

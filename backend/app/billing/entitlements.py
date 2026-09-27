@@ -13,7 +13,7 @@ MAX_BILLING_DAY = 28
 
 
 def as_utc(dt: datetime | None) -> datetime | None:
-    # Motor returns naive datetimes (the client isn't tz_aware); they're stored as UTC.
+    # Stored as UTC; older reads (or a non-tz_aware client) may still hand back naive ones.
     if dt is None:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

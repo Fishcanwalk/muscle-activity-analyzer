@@ -100,16 +100,31 @@ function buildSession(id: string, group: SetResult[]): WorkoutSession {
 	};
 }
 
+// Dates are shown in Thai time on purpose: several of these run in SvelteKit's server
+// load functions, where the container's clock is UTC and a workout before 07:00 would
+// otherwise land on the previous day.
+export const APP_TIME_ZONE = 'Asia/Bangkok';
+
 export function thaiDate(iso: string): string {
 	return new Date(iso).toLocaleDateString('th-TH', {
 		day: 'numeric',
 		month: 'short',
-		year: 'numeric'
+		year: 'numeric',
+		timeZone: APP_TIME_ZONE
 	});
 }
 
 export function thaiShortDate(iso: string): string {
-	return new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+	return new Date(iso).toLocaleDateString('th-TH', {
+		day: 'numeric',
+		month: 'short',
+		timeZone: APP_TIME_ZONE
+	});
+}
+
+/** The calendar day in Thai time, as YYYY-MM-DD. */
+export function thaiDayKey(iso: string): string {
+	return new Date(iso).toLocaleDateString('en-CA', { timeZone: APP_TIME_ZONE });
 }
 
 export interface MetricComparison {

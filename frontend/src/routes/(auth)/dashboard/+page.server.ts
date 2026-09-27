@@ -6,6 +6,7 @@ import {
 	groupSetsIntoSessions,
 	thaiDate,
 	thaiShortDate,
+	thaiDayKey,
 	type SetResult,
 	type WorkoutSession
 } from '$lib/workout/metrics';
@@ -30,15 +31,27 @@ function initialsFromName(name: string): string {
 	return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-function isoWeekLabel(iso: string): string {
-	const d = new Date(iso);
-	const monday = new Date(d);
-	monday.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-	return monday.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+// Monday-to-Sunday week in Thai time, labelled with its range ("21–27 ก.ย.") so a
+// workout on Sunday the 27th isn't shown under the week's first day only.
+function weekKeyAndLabel(iso: string): { key: string; label: string } {
+	// thaiDayKey is a Thai calendar day; parsed as UTC midnight it can be shifted by
+	// whole days in UTC without any time-zone drift.
+	const day = new Date(thaiDayKey(iso));
+	const monday = new Date(day);
+	monday.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+	const sunday = new Date(monday);
+	sunday.setUTCDate(monday.getUTCDate() + 6);
+	const fmt = (d: Date, opts: Intl.DateTimeFormatOptions) =>
+		d.toLocaleDateString('th-TH', { ...opts, timeZone: 'UTC' });
+	const label =
+		monday.getUTCMonth() === sunday.getUTCMonth()
+			? `${monday.getUTCDate()}–${fmt(sunday, { day: 'numeric', month: 'short' })}`
+			: `${fmt(monday, { day: 'numeric', month: 'short' })} – ${fmt(sunday, { day: 'numeric', month: 'short' })}`;
+	return { key: monday.toISOString().slice(0, 10), label };
 }
 
 function computeStreakDays(sets: SetResult[]): number {
-	const days = [...new Set(sets.map((s) => s.created_at.slice(0, 10)))].sort().reverse();
+	const days = [...new Set(sets.map((s) => thaiDayKey(s.created_at)))].sort().reverse();
 	if (days.length === 0) return 0;
 	let streak = 1;
 	const cursor = new Date(days[0]);
@@ -89,11 +102,11 @@ function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserPro
 
 	const weekBuckets = new Map<string, { week: string; clean: number; cheated: number }>();
 	for (const s of sets) {
-		const label = isoWeekLabel(s.created_at);
-		const bucket = weekBuckets.get(label) ?? { week: label, clean: 0, cheated: 0 };
+		const { key, label } = weekKeyAndLabel(s.created_at);
+		const bucket = weekBuckets.get(key) ?? { week: label, clean: 0, cheated: 0 };
 		bucket.clean += s.weightKg * s.cleanReps;
 		bucket.cheated += s.weightKg * s.cheatedReps;
-		weekBuckets.set(label, bucket);
+		weekBuckets.set(key, bucket);
 	}
 	const weeklyVolume = [...weekBuckets.values()].slice(-8);
 
