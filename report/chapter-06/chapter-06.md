@@ -1,47 +1,72 @@
-# บทที่ 6 การจัดเก็บข้อมูลและการนำไปใช้
+# บทที่ 6 โครงสร้างและการทำงานของโค้ด
 
-## 6.1 ภาพรวมข้อมูลสด ข้อมูลที่บันทึก และความสัมพันธ์ของข้อมูล
+## 6.1 แผนผัง codebase และหน้าที่ของเฟิร์มแวร์ เว็บ และ API
 
-ข้อมูลสดเริ่มจาก ESP32 แล้วถูกเก็บชั่วคราวใน `ServerTelemetryState` ของ frontend เพื่อแสดงผลและกระจายผ่าน SSE ข้อมูลชุดนี้เป็นสถานะล่าสุด ไม่ใช่ประวัติถาวรทั้งหมด
+```text
+test-sensor/arduino/
+├── uno_emg_fsr_link/              # Uno: ADC + Timer1 + UART
+└── esp32_workout_firmware/        # ESP32: FreeRTOS + I2C + Wi-Fi + HTTP
 
-เมื่อมีการส่งต่อไป backend จะเกิดเอกสารใน `telemetry_samples` โดยมี `received_at` และข้อมูลผู้ใช้/เซสชันตามที่ส่งมา ส่วนผลสรุปหลังจบเซตถูกส่งไป `session_results` และ calibration ถูกเก็บใน `calibrations` แยกจาก telemetry
+frontend/src/
+├── routes/api/                    # endpoint รับ telemetry, SSE, recording, calibration
+├── lib/server/telemetryStore.ts   # สถานะสดและการส่งต่อ backend
+└── lib/workout/                   # state ของ workout, telemetry, camera, recording
 
-ความสัมพันธ์หลักคือผู้ใช้หนึ่งคนมี calibration ของตนเอง มี telemetry ที่ใช้ติดตามช่วงเวลา และมีผลเซสชันหลายรายการที่อ้างอิง `session_id` ได้ ข้อมูล authentication ใช้ `users` และ `refresh_tokens` รองรับการเข้าถึงข้อมูลส่วนตัว
+backend/app/
+├── routers/                       # auth, telemetry, sessions, calibration, users
+├── models/                        # schema ข้อมูล
+├── db.py                          # MongoDB และ index
+└── security.py                    # JWT และ password
+```
 
-## 6.2 Collections และฟิลด์สำคัญ
+ผังนี้เป็นสรุปหน้าที่ของส่วนประกอบหลัก ไม่ได้รวมไฟล์ที่อยู่นอกขอบเขตแหล่งข้อมูลของรายงาน
 
-| Collection | ฟิลด์สำคัญ | หน้าที่ |
-|---|---|---|
-| `users` | email, name, password_hash, roles, is_active, created_at | บัญชีผู้ใช้ |
-| `refresh_tokens` | jti, user_id, revoked, created_at, expires_at | token สำหรับต่ออายุ session |
-| `telemetry_samples` | emg, fsr, mpu, vitals, device, timestamp, user_id, session_id, received_at | ข้อมูลเซนเซอร์ที่รับเข้า |
-| `session_results` | setNumber, exercise, weightKg, totalReps, cleanReps, cheatedReps, reps, session_id, user_id, created_at | ผลสรุปการฝึก |
-| `calibrations` | user_id, emgBaseline, emgMvc, fsrZero, fsrMax, updated_at | ค่า calibration ต่อผู้ใช้ |
+## 6.2 Arduino Uno: Timer1, ADC Interrupt, Watchdog และ UART
 
-ชื่อและฟิลด์ข้างต้นมาจากการสร้าง index, Pydantic models และ router ของ backend โดยตรง
+เฟิร์มแวร์ `uno_emg_fsr_link.ino` ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ 100 Hz หรือทุก 10 ms เมื่อเกิด `TIMER1_COMPA_vect` จะตั้ง `FLAG_TIMER_TICK` ให้ loop เริ่มรอบอ่านใหม่
 
-## 6.3 เก็บข้อมูลแต่ละประเภทเพื่อใช้ทำอะไร และส่วนใดของระบบเรียกใช้จริง
+การอ่าน ADC ไม่ใช้ `analogRead()` แบบรอค้าง แต่เปิด ADC complete interrupt และเริ่ม conversion ที่ A0 สำหรับ EMG เมื่อเสร็จจะเก็บค่าและเริ่ม A1 สำหรับ FSR ต่อทันที เมื่อ FSR เสร็จ loop จะคัดลอกค่าด้วยช่วง `cli()`/`sei()` แล้วกลับด้าน FSR เพราะเซนเซอร์อ่านค่าสูงตอนพัก
 
-- **telemetry สด** ใช้โดย `telemetryStore` เพื่อคำนวณหน่วย แสดงแดชบอร์ด และส่ง event ไป browser
-- **telemetry ที่บันทึกใน MongoDB** ใช้เป็นประวัติข้อมูลตามช่วงเวลา โดย endpoint history สามารถค้นตาม `since` และ `limit`
-- **session results** ใช้แสดงผลหลังจบเซตและประวัติการฝึก โดย query ได้ตามผู้ใช้และ `session_id`
-- **calibration** ใช้ทั้งในหน้า calibration และใน telemetry store เพื่อแปลง raw ADC เป็นค่าที่แสดงผล
-- **users และ refresh tokens** ใช้ยืนยันตัวตนและจำกัดการเข้าถึงข้อมูลของแต่ละผู้ใช้
+CPU ใช้ `SLEEP_MODE_IDLE` ระหว่างรอ timer และ ADC interrupt ส่วน watchdog ตั้งไว้ 2 วินาทีและ reset เมื่อจบรอบอ่านครบ หากรอบอ่านไม่เดินต่อจะ reset อุปกรณ์
 
-การบันทึกการวัดแบบละเอียดกับการบันทึกผลสรุปถูกแยกกัน เพื่อให้หน้าใช้งานอ่านผลเซตได้ง่ายโดยไม่ต้องประมวลผล telemetry ทั้งหมดใหม่
+ค่าที่ได้จาก ADC 10-bit ถูก map เป็น 0-4095 แล้วส่งด้วย `Serial` ที่ 9600 baud เป็นรูปแบบ `emg,fsr` ต่อบรรทัด ผ่าน pin 0/1 ของ Uno ตามโค้ดปัจจุบัน
 
-## 6.4 ตัวอย่างเอกสาร ดัชนี การค้นคืน และอายุข้อมูล
+ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 2 เป็นรูปประกอบหัวข้อนี้
 
-backend สร้างดัชนีดังนี้
+## 6.3 ESP32: FreeRTOS, Hardware Timer, GPIO Interrupt, Watchdog, I2C และการส่งข้อมูล
 
-- `users.email` แบบ unique
-- `refresh_tokens.jti` แบบ unique
-- `calibrations.user_id` แบบ unique
-- `session_results` ตาม `user_id` และ `created_at` เพื่อเรียงผลย้อนหลัง
-- `session_results.session_id` เพื่อค้นตามเซสชัน
-- `telemetry_samples` ตาม `user_id` และ `received_at` เพื่อค้นประวัติของผู้ใช้
-- `telemetry_samples.received_at` แบบ TTL ตาม `TELEMETRY_RETENTION_DAYS` ซึ่งค่าเริ่มต้นใน settings คือ 90 วัน
+ESP32 แยกงานเป็น `SensorTask`, `NetworkTask`, `LcdTask` และ `ControlTask` ด้วย `xTaskCreatePinnedToCore()` โดย SensorTask อ่านข้อมูลถี่ที่สุด, NetworkTask ส่ง HTTP ทุก 250 ms, LcdTask อัปเดตจอทุก 200 ms และ ControlTask จัดการปุ่มกับสถานะการฝึก
 
-ตัวอย่างการค้นคืน telemetry คือ query ด้วย `user_id` ของผู้ใช้ปัจจุบัน และถ้ามี `since` จะเปลี่ยนเป็นเงื่อนไข `received_at >= since` พร้อมจำกัดจำนวนผลไม่เกิน 2,000 รายการ ส่วน session history จำกัดค่าเริ่มต้น 50 และสูงสุด 200 รายการ
+hardware timer ใช้ปลุก semaphore ของรอบ sampling ที่ 100 Hz ส่วนปุ่ม GPIO32 และ GPIO33 ใช้ interrupt handler ส่ง event เข้า `buttonEventQueue` โดยใช้ตัวจับเวลาไมโครวินาทีเพื่อทำ debounce 250 ms ปุ่ม A ยังเป็น wake source ในโหมด light sleep ตามข้อจำกัดของบอร์ด
 
-แหล่งข้อมูล: `backend/app/db.py`, `backend/app/routers/`, `backend/app/models/`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/routers/telemetry.py`, `backend/app/routers/sessions.py`, `backend/app/routers/calibration.py`, `frontend/src/lib/workout/`, `backend/app/config.py`
+watchdog ของ ESP32 ตั้ง timeout 5 วินาทีและเพิ่ม task หลักเข้า watchdog แต่ละ task เรียก `esp_task_wdt_reset()` หลังทำงาน ส่วนการอ่าน MPU, MAX30102, MLX90614 และ LCD ใช้ I2C bus ที่ SDA21/SCL22 และมี mutex ป้องกันการใช้งานร่วมกัน
+
+ข้อมูลจาก Uno อ่านผ่าน `Serial2` ที่ GPIO16/17 และ 9600 baud จากนั้น NetworkTask จะรวมข้อมูลใน JSON แล้วใช้ `HTTPClient.POST()` ส่งไปยัง URL ของ frontend
+
+ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 3 เป็นรูปประกอบหัวข้อนี้
+
+## 6.4 เว็บและเซิร์ฟเวอร์: รับ telemetry, กระจาย SSE, เริ่ม/หยุดบันทึก, ส่งต่อ FastAPI และเก็บ MongoDB
+
+Frontend route `POST /api/telemetry` รับ JSON จาก ESP32 แล้วเรียก `serverTelemetry.ingestFullTelemetry()` ส่วน `GET /api/telemetry/stream` ส่ง initial state และ event แบบ `telemetry` หรือ `button` ผ่าน SSE ให้ browser
+
+`telemetryStore` เก็บ raw buffer และสถานะล่าสุด คำนวณ EMG/FSR ที่ใช้แสดงผล และเรียก `forwardToBackend()` เพื่อส่งข้อมูลไป FastAPI ด้วย service token ฝั่ง backend มี `POST /v1/telemetry` สำหรับ machine-to-machine และ `GET /v1/telemetry` สำหรับ history ของผู้ใช้ที่ login แล้ว
+
+การเริ่ม/หยุดบันทึกใช้ `POST /api/recording` โดย frontend ตรวจสอบผู้ใช้ผ่าน FastAPI client และมี recording slot เดียวต่อ hardware rig ส่วน calibration proxy เรียก `GET/POST /v1/calibration` แล้ว mirror ค่ากลับเข้า in-memory store
+
+FastAPI สร้าง index ตอนเริ่มแอปและใช้ Motor เชื่อม MongoDB การสร้าง session result เขียนลง `session_results` ขณะที่ telemetry เขียนลง `telemetry_samples`
+
+## 6.5 เส้นทางข้อมูลแบบครบวงจรและตัวอย่างโค้ดสำคัญ
+
+เส้นทางข้อมูลหนึ่งรอบเริ่มจาก `ISR(TIMER1_COMPA_vect)` ของ Uno ตั้ง flag → ADC interrupt อ่าน A0/A1 → `Serial.print()` ส่งข้อความ → ESP32 `pollUnoLink()` parse บรรทัด → `SensorTask` อัปเดต `SharedState` → `NetworkTask` สร้าง JSON → `http.POST(payload)` → frontend `ingestFullTelemetry()` → SSE และ `forwardToBackend()` → FastAPI insert MongoDB
+
+ตัวอย่างจุดสำคัญที่ควรนำไปแสดงในรายงานฉบับเต็ม:
+
+- การตั้ง Timer1 และ ADC ISR ใน `uno_emg_fsr_link.ino`
+- การ parse `emg,fsr` และการอ่าน I2C ใน `esp32_workout_firmware.ino`
+- การสร้าง telemetry payload ใน NetworkTask
+- การ broadcast event ใน `frontend/src/routes/api/telemetry/stream/+server.ts`
+- การ insert ใน `backend/app/routers/telemetry.py`
+
+ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 1 เป็นรูปสรุปเส้นทางข้อมูล และ Flowchart 2-3 เป็นรายละเอียดฝั่งไมโครคอนโทรลเลอร์
+
+แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/uno_emg_fsr_link/board_config.h`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`

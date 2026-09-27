@@ -1,41 +1,33 @@
-# บทที่ 9 ปัญหาที่พบและวิธีแก้ไข
+# บทที่ 9 สรุปและแนวทางพัฒนา
 
-## 9.1 ปัญหาที่พบระหว่างการพัฒนาและการทดสอบ
+## 9.1 สรุปสิ่งที่พัฒนาและผลที่ได้เทียบกับวัตถุประสงค์
 
-ปัญหาที่บันทึกไว้ใน `TROUBLESHOOTING.md` ได้แก่ serial log เพี้ยนหลังบูต, ตั้ง baud ของ monitor ไม่ตรง, ไม่พบอุปกรณ์ I2C, MLX90614 หายเฉพาะตัว, ESP32 เข้าโหมด flash ไม่สำเร็จ และ Uno-ESP32 UART ไม่มีข้อมูล
+โครงงานพัฒนาระบบครบเส้นทางตั้งแต่การอ่าน sEMG/FSR บน Uno การรวมเซนเซอร์บน ESP32 การส่งข้อมูลไปเว็บ การกระจายข้อมูลแบบสด การยืนยันตัวตน และการจัดเก็บข้อมูลใน MongoDB
 
-ปัญหา UART มีรายละเอียดหลายชั้น ทั้งการใช้ขาไม่ตรงกับสายจริง จุดต่อ voltage divider หลวม และผลข้างเคียงจากการเปลี่ยน Uno ไปใช้ pin 0/1 ซึ่งชนกับ USB serial และการอัปโหลดโปรแกรม
+ด้าน firmware มีการใช้ Timer1, ADC interrupt, watchdog และ sleep บน Uno ส่วน ESP32 ใช้ FreeRTOS task, hardware timer, GPIO interrupt, watchdog, I2C, UART และ HTTP ตามวัตถุประสงค์ที่กำหนดไว้ การแยกงานทำให้การอ่านเซนเซอร์ไม่ต้องรอการส่ง network โดยตรง
 
-นอกจากนี้ `PINS.md` ยังมีข้อความบางส่วนที่ระบุการใช้ pin 2/3 แบบ SoftwareSerial ไม่ตรงกับโค้ดปัจจุบันที่ใช้ Hardware Serial pin 0/1 จึงเป็นปัญหาด้านความสอดคล้องของเอกสารด้วย
+ด้านซอฟต์แวร์มี endpoint สำหรับ telemetry, SSE, recording, calibration, authentication และ session result ทำให้รองรับทั้งการดูข้อมูลสดและการเก็บผลสรุปหลังการฝึก
 
-## 9.2 สาเหตุและผลกระทบของแต่ละปัญหา
+## 9.2 ข้อจำกัดของโครงงาน
 
-| ปัญหา | สาเหตุ | ผลกระทบ |
-|---|---|---|
-| log หลังบูตเพี้ยน | UART และ boot log ชนกันก่อน hardware settle | อ่าน log ช่วงเริ่มต้นไม่ได้ |
-| monitor เพี้ยนทั้งหน้าจอ | baud ของ monitor เป็น 9600 แต่ ESP32 ส่ง 115200 | ข้อมูลถูก decode ผิดทั้งหมด |
-| I2C หายหลายตัว | SDA/SCL หรือ ground มีปัญหา | เซนเซอร์ทั้ง bus ใช้ไม่ได้ |
-| MLX90614 หายตัวเดียว | สายหรือไฟเลี้ยงของ MLX90614 หลวม | อุณหภูมิเป็นศูนย์หรือไม่อัปเดต |
-| upload ESP32 ไม่ผ่าน | auto-reset/boot mode ไม่เสถียร | อัปโหลด firmware ไม่สำเร็จ |
-| UART ไม่มีข้อมูล | ขาโค้ดไม่ตรงสาย, จุดต่อ divider หลวม, ใช้พอร์ตชนกับ USB | ESP32 parse ไม่ได้และ FSR ค้างที่ศูนย์ |
-| เอกสาร pin ไม่ตรงโค้ด | เอกสารเดิมยังอ้าง SoftwareSerial | ต่อวงจรหรือ debug ผิดจุดได้ |
+1. ค่าที่แปลงจาก ADC เป็นหน่วย EMG และแรงเป็นค่าประมาณและขึ้นกับ gain/full-scale กับ calibration
+2. SpO2 ใน firmware ระบุว่าเป็น rough estimate ไม่ใช่ค่าทางคลินิก
+3. การนับครั้งจากกล้องขึ้นกับมุมกล้อง แสง และการมองเห็นแขน/ลำตัว
+4. Recording slot ใน telemetry store เป็นทรัพยากรร่วมและรองรับการบันทึกจริงทีละรายการ
+5. UART Uno ใช้ pin 0/1 จึงชนกับ USB serial และต้องถอดสายก่อน upload
+6. `PINS.md` และบางส่วนของ `README.md` ยังมีข้อมูลเดิมที่ควรปรับให้ตรงกับโค้ดปัจจุบัน
+7. รายงานแหล่งข้อมูลยังไม่มีผล validation เชิงตัวเลขสำหรับความแม่นยำของเซนเซอร์
 
-## 9.3 วิธีที่ใช้แก้ไขและเหตุผลที่เลือกวิธีนั้น
+## 9.3 แนวทางพัฒนาต่อ
 
-- เพิ่ม delay หลัง `Serial.begin()` ของ ESP32 เพื่อให้ UART settle ก่อนพิมพ์ log
-- ระบุ environment หรือ baud ให้ `pio device monitor` ตรงกับ firmware
-- ตรวจและต่อ SDA/SCL ใหม่ แล้วใช้ I2C scanner ยืนยัน address
-- ตรวจ VCC/SDA/SCL ของ MLX90614 แยกจากอุปกรณ์อื่นเมื่ออุปกรณ์อื่นยังพบปกติ
-- ใช้ขั้นตอนกด BOOT และ EN/RESET ด้วยมือเมื่อ auto-reset เข้า download mode ไม่สำเร็จ
-- เปลี่ยน Uno ให้ใช้ Hardware Serial pin 0/1 ให้ตรงกับการต่อสายจริง และถอดสายก่อน upload
-- กดจุดต่อ R1/R2 ของ voltage divider ให้แน่น แล้วใช้ raw echo ตรวจ byte ก่อนตรวจ parser
+- ปรับปรุง `PINS.md` และคู่มือใน `README.md` ให้ใช้ path และ pin mapping เดียวกับโค้ดปัจจุบัน
+- เพิ่ม automated test สำหรับ parser UART, การแปลง calibration, telemetry schema และ endpoint authentication
+- เพิ่มชุดข้อมูลอ้างอิงเพื่อประเมินความแม่นยำของ EMG, FSR, HR และ SpO2 อย่างเป็นระบบ
+- แยกการตั้งค่า Wi-Fi, server URL และ secret ออกจาก source code พร้อมตรวจสอบการจัดการ credential
+- ปรับการเก็บ telemetry ให้เหมาะกับปริมาณข้อมูลและความต้องการค้นย้อนหลัง รวมถึงกำหนด policy retention ให้ชัดเจน
+- เพิ่มกลไกตรวจสอบความถูกต้องของ timestamp และการ reconnect ของอุปกรณ์
+- พิจารณาปรับลิงก์ Uno-ESP32 ให้ไม่ชนกับ USB serial หรือเพิ่มโหมด debug ที่ไม่ปนกับข้อมูล telemetry
 
-เหตุผลร่วมของวิธีเหล่านี้คือแยกตรวจทีละชั้น ตั้งแต่ physical link, baud/address, byte stream, parser และการทำงานของระบบ เพื่อไม่แก้ปัญหาผิดชั้น
+แนวทางเหล่านี้ต่อยอดจากข้อจำกัดและปัญหาที่ปรากฏใน source code, README และ troubleshooting โดยไม่สรุปว่าเป็นฟังก์ชันที่มีอยู่แล้วในระบบปัจจุบัน
 
-## 9.4 ผลหลังแก้ไขและปัญหาที่ยังเหลืออยู่
-
-หลังแก้การต่อสายและจุดต่อ voltage divider พบว่า byte counter วิ่งต่อเนื่องและข้อมูล `<emg>,<fsr>\r\n` เข้ามาได้ถูกต้อง การใช้ Hardware Serial ทำให้โค้ดตรงกับการต่อจริง แต่ทำให้ไม่สามารถใช้ USB serial monitor ของ Uno พร้อมกับการต่อ ESP32 บน pin เดียวกันได้
-
-ปัญหาที่เหลือคือ `PINS.md` ยังต้องอัปเดตส่วน UART ให้ตรงกับโค้ดปัจจุบัน และการใช้งาน pin 0/1 ต้องมีขั้นตอนถอดสายก่อน upload ทุกครั้ง นอกจากนี้เอกสารบางส่วนใน `README.md` ยังอ้างชื่อไฟล์หรือโครงสร้างเดิม จึงควรตรวจให้ตรงกับโฟลเดอร์ Arduino ปัจจุบันก่อนนำไปใช้เป็นคู่มือปฏิบัติ
-
-แหล่งข้อมูล: `TROUBLESHOOTING.md`, `PINS.md`, `test-sensor/arduino/`, `README.md`
+แหล่งข้อมูล: `README.md`, `PINS.md`, `TROUBLESHOOTING.md`, `backend/`, `frontend/`, `frontend/src/lib/server/telemetryStore.ts`, `frontend/src/lib/workout/cameraRepCounter.svelte.ts`, โค้ด Arduino ทั้งสองโฟลเดอร์

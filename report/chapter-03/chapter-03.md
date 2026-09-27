@@ -1,42 +1,65 @@
-# บทที่ 3 การออกแบบระบบ
+# บทที่ 3 การพัฒนา
 
-## 3.1 ภาพรวมสถาปัตยกรรมและองค์ประกอบของระบบ
+## 3.1 ภาษา เครื่องมือ และสภาพแวดล้อมที่ใช้พัฒนา
 
-ระบบแบ่งเป็น 4 ชั้นหลัก
+| ส่วน | ภาษา/เครื่องมือที่ปรากฏในแหล่งข้อมูล | หน้าที่ |
+|---|---|---|
+| Arduino Uno และ ESP32 | C/C++ บน Arduino framework | อ่านเซนเซอร์ ประมวลผล และส่ง telemetry |
+| Backend | Python, FastAPI, Pydantic, Motor | API, authentication และการเข้าถึง MongoDB |
+| Frontend | TypeScript, SvelteKit | แดชบอร์ด API proxy SSE และ state การฝึก |
+| ฐานข้อมูล | MongoDB | เก็บ telemetry ผลเซสชัน calibration และข้อมูลผู้ใช้ |
+| การพัฒนาในเครื่อง | Docker, Poetry, npm | เตรียม MongoDB ติดตั้ง dependency และรันบริการ |
 
-1. **ชั้นเซนเซอร์และเฟิร์มแวร์** — Uno อ่าน sEMG/FSR และ ESP32 รวมข้อมูลจาก Uno กับเซนเซอร์ I2C
-2. **ชั้นรับข้อมูลของเว็บ** — SvelteKit รับ HTTP POST จาก ESP32 เก็บสถานะสดใน `telemetryStore` และกระจายด้วย SSE
-3. **ชั้น API และฐานข้อมูล** — FastAPI ตรวจสอบ token รับ telemetry ผลเซสชัน และ calibration แล้วเก็บใน MongoDB
-4. **ชั้นผู้ใช้** — หน้า Svelte แสดงค่าร่างกาย กราฟ สถานะอุปกรณ์ กล้อง และผลการฝึก
+README ระบุสภาพแวดล้อมหลักเป็น Python 3.11 ขึ้นไป, Poetry, Node.js 20 ขึ้นไป, npm และ Docker Compose สำหรับ MongoDB
 
-ภาพรวมการเชื่อมต่ออยู่ใน [`../flowchart.md`](../flowchart.md) Flowchart 1
+### รายการอุปกรณ์และวัสดุ
 
-## 3.2 ลำดับขั้นตอนและการไหลของข้อมูล
+รายการด้านล่างเป็นอุปกรณ์และวัสดุที่ต้องใช้สำหรับประกอบและทดสอบระบบตามการกำหนดพินใน `PINS.md` และการเรียกใช้งานจริงใน firmware สองไฟล์
 
-ในระดับออกแบบ ข้อมูลไหลผ่านระบบเป็นลำดับเดียวจากล่างขึ้นบน โดยแต่ละชั้นรับผิดชอบงานของตนเองแล้วส่งต่อให้ชั้นถัดไป
+| รายการ | จำนวนโดยประมาณ | หน้าที่หรือจุดสังเกต |
+|---|---:|---|
+| บอร์ด ESP32 DevKit (ลอจิก 3.3V) | 1 | อ่านเซนเซอร์ I2C, รับ UART, ประมวลผล และส่งข้อมูลผ่าน Wi-Fi |
+| Arduino Uno หรือ Nano (ลอจิก 5V) | 1 | อ่าน sEMG และ FSR ด้วย ADC แล้วส่งข้อมูลให้ ESP32 ที่ 9600 baud |
+| เซนเซอร์ sEMG | 1 ชุด | ต่อเข้าขา A0 ของ Arduino Uno |
+| เซนเซอร์ FSR | 1 ชุด | ต่อเข้าขา A1 ของ Arduino Uno เพื่ออ่านแรงกด/แรงกำ |
+| MPU6050 หรือ MPU6500 ที่ใช้ I2C | 1 | วัดการเคลื่อนไหว มุม และใช้คำนวณความเร็วการยก |
+| MAX30102 | 1 | อ่านชีพจรและใช้คำนวณค่า SpO₂ โดยค่าที่ได้เป็นค่าประมาณ |
+| MLX90614 | 1 | วัดอุณหภูมิแบบไม่สัมผัส/อุณหภูมิผิว |
+| LCD 16x2 พร้อม I2C backpack PCF8574 | 1 | แสดงจำนวนครั้ง ความเร็ว และชีพจรบนอุปกรณ์ โดยค่าเริ่มต้นใช้ address `0x27` |
+| Active buzzer | 1 | แจ้งเตือนเมื่อแรงกำต่ำหรือแรงกำไม่นิ่งระหว่างเซต |
+| ปุ่มกด | 2 | ปุ่ม A ต่อ GPIO32 และปุ่ม B ต่อ GPIO33 แบบ `INPUT_PULLUP` กดแล้วเป็น LOW |
+| ตัวต้านทาน 4.7 kΩ | 2 | Pull-up ของสาย I2C SDA/SCL ไปที่ 3.3V หากโมดูลไม่มีตัวต้านทานติดมา |
+| ตัวต้านทาน 1 kΩ และ 2.2 kΩ | อย่างละ 1 | Voltage divider ลดระดับสัญญาณจาก Uno TX 5V ก่อนเข้า ESP32 RX GPIO16 |
+| ตัวต้านทาน 10 kΩ หรือ level shifter | 1 ชุด (ทางเลือก) | ใช้ช่วยดึงสัญญาณฝั่ง ESP32 TX หรือปรับระดับสัญญาณ หาก UART ไม่เสถียร |
+| สาย jumper, breadboard และจุดต่อสาย | ตามการประกอบ | เชื่อมต่อบอร์ด เซนเซอร์ ปุ่ม และวงจรแบ่งแรงดัน โดยต้องต่อ GND ร่วมกัน |
+| สาย USB และคอมพิวเตอร์สำหรับอัปโหลด/ดู Serial Monitor | 1 ชุด | ใช้อัปโหลด firmware และตรวจสอบ log; ต้องถอดสาย UART ที่ชนกับ pin 0/1 ของ Uno ก่อนอัปโหลด |
 
-1. เซนเซอร์ sEMG และ FSR ต่อกับ Uno ซึ่งอ่านค่าและส่งต่อให้ ESP32 ผ่านลิงก์อนุกรมระหว่างบอร์ด
-2. ESP32 รวมค่าจาก Uno เข้ากับเซนเซอร์ I2C ของตัวเอง แล้วประกอบเป็น telemetry ชุดเดียว
-3. ESP32 ส่ง telemetry ให้ frontend ทาง HTTP ซึ่งอัปเดตสถานะสดและกระจายต่อให้ผู้ใช้ผ่าน SSE
-4. frontend ส่งต่อ telemetry ให้ FastAPI เพื่อตรวจสอบสิทธิ์และบันทึกลง MongoDB
+ข้อควรระวังคือ Uno ใช้ระดับสัญญาณ 5V แต่ GPIO ของ ESP32 รับได้ 3.3V จึงต้องผ่าน voltage divider ในทิศทาง Uno TX ไป ESP32 RX และต้องต่อกราวด์ร่วมกัน ส่วนเซนเซอร์ I2C ทั้งหมดใช้บัส SDA GPIO21 และ SCL GPIO22 ของ ESP32
 
-รายละเอียดการอ่านสัญญาณ การตั้งเวลา และรูปแบบข้อความจริงในแต่ละขั้นตอนอยู่ในบทที่ 7 (โครงสร้างและการทำงานของโค้ด) ให้ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 1 เป็นรูปประกอบหัวข้อนี้
+## 3.2 โครงสร้างซอฟต์แวร์และหน้าที่ของส่วนประกอบหลัก
 
-## 3.3 การออกแบบขั้นตอนประมวลผล
+### เฟิร์มแวร์
 
-หลักการออกแบบคือแบ่งงานตามความเร่งด่วน เพื่อไม่ให้งานที่ต้องสม่ำเสมอ เช่น การอ่านสัญญาณเซนเซอร์ ถูกผูกกับความเร็วของงานที่ไม่แน่นอน เช่น การส่งเครือข่ายหรือการแสดงผล
+- `uno_emg_fsr_link/uno_emg_fsr_link.ino` — อ่าน EMG/FSR ด้วย ADC และส่ง UART
+- `uno_emg_fsr_link/board_config.h` — กำหนดขาและช่วง ADC ของบอร์ด
+- `esp32_workout_firmware/esp32_workout_firmware.ino` — รวมข้อมูลเซนเซอร์ จัดการ task, ปุ่ม, จอ, buzzer, Wi-Fi และ HTTP
+- `esp32_workout_firmware/board_config.h` — กำหนด mapping I2C/ADC แบบหลายสถาปัตยกรรม
 
-- ฝั่งไมโครคอนโทรลเลอร์แยกงานอ่านสัญญาณที่ต้องตรงเวลาออกจากงานสื่อสารและงานแสดงผลบนจอ
-- ฝั่งเว็บแปลงค่าและคำนวณค่าที่ใช้แสดงผลก่อน broadcast ให้ browser โดยไม่บล็อกการรับข้อมูลใหม่ที่เข้ามาต่อเนื่อง
+### เว็บและ API
 
-รายละเอียดการแบ่ง task การตั้งเวลา และกลไกแชร์ข้อมูลระหว่าง task ของ ESP32 อยู่ในหัวข้อ 7.3
+- `frontend/src/routes/api/telemetry` — รับ telemetry และเปิด SSE
+- `frontend/src/lib/server/telemetryStore.ts` — เก็บสถานะสด แปลงค่า และส่งต่อ backend
+- `frontend/src/lib/workout/` — state ของ workout, telemetry, camera, recording และ calibration
+- `backend/app/routers/` — endpoint authentication, telemetry, sessions, calibration และ users
+- `backend/app/models/` — schema ข้อมูลที่รับและส่ง
+- `backend/app/db.py` — client MongoDB และการสร้างดัชนี
 
-## 3.4 การออกแบบส่วนติดต่อผู้ใช้
+## 3.3 การพัฒนาฟังก์ชันหลักและการเชื่อมต่อระหว่างส่วนประกอบ
 
-ส่วนติดต่อผู้ใช้แบ่งเป็นหน้าความพร้อม หน้า live studio หน้าสรุปหลังจบเซต หน้า analytics และหน้าปรับเทียบ โดยข้อมูลสดมาจาก SSE และถูกเก็บใน state ของ frontend
+การเชื่อมต่อเริ่มจาก UART ระหว่าง Uno กับ ESP32 โดย Uno ส่งข้อความหนึ่งบรรทัดต่อรอบอ่าน และ ESP32 อ่านจนพบ newline แล้ว parse เป็นจำนวนเต็มสองค่า จากนั้น ESP32 รวมกับข้อมูล I2C และสร้าง JSON telemetry
 
-หน้า live studio แสดงค่าหลัก เช่น EMG, FSR, MPU, HR, SpO2, อุณหภูมิ และสถานะการเชื่อมต่อ นอกจากนี้ยังมีการรับข้อมูลกล้องเพื่อคำนวณมุมข้อศอก การโกงท่า และจำนวนครั้ง ส่วนการบันทึกข้อมูลสามารถเริ่ม/หยุดและส่งออกเป็น JSON หรือ CSV ได้
+Frontend route `/api/telemetry` รับ JSON และเรียก `ingestFullTelemetry()` เพื่ออัปเดตสถานะสด เมื่อมีข้อมูลใหม่จะ broadcast event `telemetry` ให้ browser และเรียก `forwardToBackend()` เพื่อส่งต่อไป FastAPI
 
-ปุ่มจริงบน ESP32 ถูกส่งเป็น event ผ่าน telemetry แล้ว frontend แปลงให้ทำงานเหมือนปุ่มบนหน้าเว็บ ทำให้ผู้ใช้ควบคุมเซตได้โดยไม่ต้องอยู่หน้าอุปกรณ์ตลอดเวลา
+การปรับเทียบใช้ frontend route `/api/calibration` เป็น proxy ที่ตรวจสอบผู้ใช้ เรียก backend และอัปเดต cache ใน telemetry store ให้การแปลงหน่วยของข้อมูลสดใช้ค่าเดียวกับค่าที่บันทึกไว้ ส่วนผลเซตใช้ route ของ FastAPI ผ่าน client ที่สร้างใน frontend
 
-แหล่งข้อมูล: `README.md`, `backend/app/main.py`, `frontend/src/routes/api/`, `test-sensor/arduino/`, `frontend/src/lib/server/telemetryStore.ts`, `frontend/src/lib/workout/`, `frontend/src/lib/components/workout/`, `frontend/src/routes/api/telemetry/stream/+server.ts`, `PINS.md`
+แหล่งข้อมูล: `README.md`, `backend/pyproject.toml`, `frontend/package.json`, โครงสร้างไฟล์ใน `backend/`, `frontend/` และสองโฟลเดอร์เฟิร์มแวร์, `frontend/src/routes/api/telemetry/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/routers/telemetry.py`, `backend/app/routers/calibration.py`, โค้ด Arduino ทั้งสองโฟลเดอร์

@@ -4,9 +4,9 @@
 
 ไฟล์ [`flowchart.md`](flowchart.md) มี Mermaid 3 ชุดสำหรับใช้สร้างภาพประกอบ
 
-- Flowchart 1: การไหลของข้อมูลจาก Uno ถึง MongoDB — ใช้ในข้อ 3.2 และ 7.5
-- Flowchart 2: Timer1, ADC interrupt และ UART ของ Uno — ใช้ในข้อ 7.2
-- Flowchart 3: Task, timer, interrupt, I2C และ HTTP ของ ESP32 — ใช้ในข้อ 7.3
+- Flowchart 1: การไหลของข้อมูลจาก Uno ถึง MongoDB — ใช้ในข้อ 2.2 และ 6.5
+- Flowchart 2: Timer1, ADC interrupt และ UART ของ Uno — ใช้ในข้อ 6.2
+- Flowchart 3: Task, timer, interrupt, I2C และ HTTP ของ ESP32 — ใช้ในข้อ 6.3
 
 ## ภาคผนวก ข: ข้อควรระวังในการต่ออุปกรณ์
 

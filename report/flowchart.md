@@ -9,7 +9,7 @@ Mermaid ทุกชุดตั้งใจออกแบบเป็นแน
 
 ## Flowchart 1: ภาพรวมการส่งข้อมูลจาก Uno ไป Backend
 
-ตำแหน่งแนะนำในรายงาน: ข้อ 3.2 และ 7.5
+ตำแหน่งแนะนำในรายงาน: ข้อ 2.2 และ 6.5
 
 ```mermaid
 %%{init: {"theme":"base", "themeVariables": {"background":"#ffffff", "primaryColor":"#ffffff", "primaryTextColor":"#000000", "primaryBorderColor":"#222222", "lineColor":"#222222", "secondaryColor":"#ffffff", "tertiaryColor":"#ffffff", "fontFamily":"Arial"}}}%%
@@ -55,7 +55,7 @@ flowchart TD
 
 ## Flowchart 2: Uno Timer, Interrupt, ADC และ UART
 
-ตำแหน่งแนะนำในรายงาน: ข้อ 7.2
+ตำแหน่งแนะนำในรายงาน: ข้อ 6.2
 
 ```mermaid
 %%{init: {"theme":"base", "themeVariables": {"background":"#ffffff", "primaryColor":"#ffffff", "primaryTextColor":"#000000", "primaryBorderColor":"#222222", "lineColor":"#222222", "secondaryColor":"#ffffff", "tertiaryColor":"#ffffff", "fontFamily":"Arial"}}}%%
@@ -101,7 +101,7 @@ flowchart TD
 
 ## Flowchart 3: ESP32 Task, I2C, UART, Interrupt และ API
 
-ตำแหน่งแนะนำในรายงาน: ข้อ 7.3
+ตำแหน่งแนะนำในรายงาน: ข้อ 6.3
 
 ```mermaid
 %%{init: {"theme":"base", "themeVariables": {"background":"#ffffff", "primaryColor":"#ffffff", "primaryTextColor":"#000000", "primaryBorderColor":"#222222", "lineColor":"#222222", "secondaryColor":"#ffffff", "tertiaryColor":"#ffffff", "fontFamily":"Arial"}}}%%

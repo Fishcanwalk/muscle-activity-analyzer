@@ -1,32 +1,47 @@
-# บทที่ 5 ข้อมูลจากเซนเซอร์
+# บทที่ 5 การจัดเก็บข้อมูลและการนำไปใช้
 
-## 5.1 กล้องและเซนเซอร์ที่ใช้: ค่าที่อ่านโดยตรง ช่วงค่า และหน่วย
+## 5.1 ภาพรวมข้อมูลสด ข้อมูลที่บันทึก และความสัมพันธ์ของข้อมูล
 
-| อุปกรณ์ | วิธีรับข้อมูล | ค่าที่เกี่ยวข้อง | ช่วง/หน่วยตามโค้ด |
-|---|---|---|---|
-| sEMG | Uno ADC A0 | raw EMG | Uno 0-1023 แล้ว scale เป็น 0-4095 |
-| FSR | Uno ADC A1 | raw/แรงกำและ stability | Uno 0-1023 กลับด้านและ scale เป็น 0-4095 |
-| MPU6050/MPU6500 | ESP32 I2C address 0x68 | ax, ay, az, pitch, roll, velocity | accel ตั้งช่วง ±8g; velocity เป็นค่าคำนวณ |
-| MAX30102 | ESP32 I2C address 0x57 | HR, SpO2 | HR เป็น BPM; SpO2 เป็นเปอร์เซ็นต์ประมาณการ |
-| MLX90614 | ESP32 I2C address 0x5A | skin temperature, delta temperature | องศาเซลเซียส |
-| กล้อง | browser video | elbow angle, torso angle, shoulder hike, motion | มุมเป็นองศา ระยะเป็นเซนติเมตร และ motion level 0-100 |
+ข้อมูลสดเริ่มจาก ESP32 แล้วถูกเก็บชั่วคราวใน `ServerTelemetryState` ของ frontend เพื่อแสดงผลและกระจายผ่าน SSE ข้อมูลชุดนี้เป็นสถานะล่าสุด ไม่ใช่ประวัติถาวรทั้งหมด
 
-ขา I2C หลักของ ESP32 คือ SDA GPIO21 และ SCL GPIO22 ตาม `PINS.md` และ `board_config.h` ส่วน Uno ใช้ A0/A1 สำหรับสัญญาณอนาล็อก
+เมื่อมีการส่งต่อไป backend จะเกิดเอกสารใน `telemetry_samples` โดยมี `received_at` และข้อมูลผู้ใช้/เซสชันตามที่ส่งมา ส่วนผลสรุปหลังจบเซตถูกส่งไป `session_results` และ calibration ถูกเก็บใน `calibrations` แยกจาก telemetry
 
-## 5.2 อัตราการอ่าน การปรับเทียบ และค่าที่คำนวณต่อ
+ความสัมพันธ์หลักคือผู้ใช้หนึ่งคนมี calibration ของตนเอง มี telemetry ที่ใช้ติดตามช่วงเวลา และมีผลเซสชันหลายรายการที่อ้างอิง `session_id` ได้ ข้อมูล authentication ใช้ `users` และ `refresh_tokens` รองรับการเข้าถึงข้อมูลส่วนตัว
 
-Uno ทำรอบอ่านที่ 100 Hz หรือทุก 10 ms โดย Timer1 CTC เริ่ม ADC EMG แล้ว ADC interrupt เริ่มอ่าน FSR ต่อกัน ส่วน ESP32 ใช้ hardware timer ปลุก `SensorTask` ทุก 10 ms เช่นกัน แต่ส่งข้อมูลเครือข่ายทุก 250 ms หรือประมาณ 4 Hz จออัปเดตทุก 200 ms และ MLX90614 อ่านทุก 250 ms
+## 5.2 Collections และฟิลด์สำคัญ
 
-การปรับเทียบของเว็บเก็บ `emgBaseline`, `emgMvc`, `fsrZero` และ `fsrMax` ต่อผู้ใช้ ค่า EMG ถูกแปลงจาก ADC โดย recenter รอบค่ากลางและหารด้วย gain ที่กำหนดใน telemetry store ส่วน FSR ถูก normalize ระหว่าง zero กับ max แล้วแปลงเป็นแรงเต็มสเกลที่กำหนดไว้ในโค้ด
+| Collection | ฟิลด์สำคัญ | หน้าที่ |
+|---|---|---|
+| `users` | email, name, password_hash, roles, is_active, created_at | บัญชีผู้ใช้ |
+| `refresh_tokens` | jti, user_id, revoked, created_at, expires_at | token สำหรับต่ออายุ session |
+| `telemetry_samples` | emg, fsr, mpu, vitals, device, timestamp, user_id, session_id, received_at | ข้อมูลเซนเซอร์ที่รับเข้า |
+| `session_results` | setNumber, exercise, weightKg, totalReps, cleanReps, cheatedReps, reps, session_id, user_id, created_at | ผลสรุปการฝึก |
+| `calibrations` | user_id, emgBaseline, emgMvc, fsrZero, fsrMax, updated_at | ค่า calibration ต่อผู้ใช้ |
 
-ค่าที่คำนวณต่อ ได้แก่ MVC percent, high-tension flag, FSR stability จากช่วงค่าหน้าต่าง, pitch/roll, velocity, HR, SpO2 จากอัตราส่วน AC/DC และ delta temperature
+ชื่อและฟิลด์ข้างต้นมาจากการสร้าง index, Pydantic models และ router ของ backend โดยตรง
 
-## 5.3 ฟิลด์ข้อมูลที่ส่งออกและข้อจำกัดของค่าประมาณ
+## 5.3 เก็บข้อมูลแต่ละประเภทเพื่อใช้ทำอะไร และส่วนใดของระบบเรียกใช้จริง
 
-telemetry หลักประกอบด้วยกลุ่ม `emg`, `fsr`, `mpu`, `vitals`, `device`, `timestamp` และอาจมี `buttons` โดย backend schema อนุญาตฟิลด์เพิ่มเติมเพื่อให้รองรับข้อมูลจากอุปกรณ์ได้ยืดหยุ่น
+- **telemetry สด** ใช้โดย `telemetryStore` เพื่อคำนวณหน่วย แสดงแดชบอร์ด และส่ง event ไป browser
+- **telemetry ที่บันทึกใน MongoDB** ใช้เป็นประวัติข้อมูลตามช่วงเวลา โดย endpoint history สามารถค้นตาม `since` และ `limit`
+- **session results** ใช้แสดงผลหลังจบเซตและประวัติการฝึก โดย query ได้ตามผู้ใช้และ `session_id`
+- **calibration** ใช้ทั้งในหน้า calibration และใน telemetry store เพื่อแปลง raw ADC เป็นค่าที่แสดงผล
+- **users และ refresh tokens** ใช้ยืนยันตัวตนและจำกัดการเข้าถึงข้อมูลของแต่ละผู้ใช้
 
-ตัวอย่างฟิลด์ที่เว็บใช้แสดงผล ได้แก่ `emg.raw`, `emg.rawBuffer`, `emg.rms`, `emg.peak`, `emg.mvcPercent`, `fsr.gripForce`, `fsr.gripStability`, `mpu.pitch`, `mpu.roll`, `mpu.velocity`, `vitals.hr`, `vitals.spo2`, `vitals.skinTemp` และสถานะอุปกรณ์
+การบันทึกการวัดแบบละเอียดกับการบันทึกผลสรุปถูกแยกกัน เพื่อให้หน้าใช้งานอ่านผลเซตได้ง่ายโดยไม่ต้องประมวลผล telemetry ทั้งหมดใหม่
 
-ข้อจำกัดสำคัญคือค่า EMG และแรง FSR อาศัย gain/full-scale ที่กำหนดในโค้ดและ calibration ของผู้ใช้ ขณะที่ SpO2 เป็น rough estimate ที่ source ระบุว่าไม่ใช่ค่าทางคลินิก และค่าจากกล้องขึ้นกับตำแหน่งกล้อง แสง และการมองเห็นร่างกาย
+## 5.4 ตัวอย่างเอกสาร ดัชนี การค้นคืน และอายุข้อมูล
 
-แหล่งข้อมูล: `PINS.md`, `README.md`, `test-sensor/arduino/esp32_workout_firmware/`, `test-sensor/arduino/uno_emg_fsr_link/`, `frontend/src/lib/workout/`, `frontend/src/lib/server/telemetryStore.ts`, `frontend/src/lib/workout/calibration.svelte.ts`, `backend/app/models/telemetry.py`, `frontend/src/lib/workout/telemetry.svelte.ts`, `frontend/src/lib/workout/cameraRepCounter.svelte.ts`
+backend สร้างดัชนีดังนี้
+
+- `users.email` แบบ unique
+- `refresh_tokens.jti` แบบ unique
+- `calibrations.user_id` แบบ unique
+- `session_results` ตาม `user_id` และ `created_at` เพื่อเรียงผลย้อนหลัง
+- `session_results.session_id` เพื่อค้นตามเซสชัน
+- `telemetry_samples` ตาม `user_id` และ `received_at` เพื่อค้นประวัติของผู้ใช้
+- `telemetry_samples.received_at` แบบ TTL ตาม `TELEMETRY_RETENTION_DAYS` ซึ่งค่าเริ่มต้นใน settings คือ 90 วัน
+
+ตัวอย่างการค้นคืน telemetry คือ query ด้วย `user_id` ของผู้ใช้ปัจจุบัน และถ้ามี `since` จะเปลี่ยนเป็นเงื่อนไข `received_at >= since` พร้อมจำกัดจำนวนผลไม่เกิน 2,000 รายการ ส่วน session history จำกัดค่าเริ่มต้น 50 และสูงสุด 200 รายการ
+
+แหล่งข้อมูล: `backend/app/db.py`, `backend/app/routers/`, `backend/app/models/`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/routers/telemetry.py`, `backend/app/routers/sessions.py`, `backend/app/routers/calibration.py`, `frontend/src/lib/workout/`, `backend/app/config.py`

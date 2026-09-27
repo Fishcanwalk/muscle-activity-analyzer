@@ -1,72 +1,47 @@
-# บทที่ 7 โครงสร้างและการทำงานของโค้ด
+# บทที่ 7 การทดสอบและผลลัพธ์
 
-## 7.1 แผนผัง codebase และหน้าที่ของเฟิร์มแวร์ เว็บ และ API
+## 7.1 วัตถุประสงค์ วิธีการ และสภาพแวดล้อมการทดสอบ
 
-```text
-test-sensor/arduino/
-├── uno_emg_fsr_link/              # Uno: ADC + Timer1 + UART
-└── esp32_workout_firmware/        # ESP32: FreeRTOS + I2C + Wi-Fi + HTTP
+การทดสอบมุ่งตรวจสอบ 4 เรื่อง คือ การอ่านค่าเซนเซอร์ การสื่อสารระหว่าง Uno กับ ESP32 การส่งข้อมูลเข้าสู่เว็บ/API และการแสดงผลหรือบันทึกข้อมูลตามเซสชัน
 
-frontend/src/
-├── routes/api/                    # endpoint รับ telemetry, SSE, recording, calibration
-├── lib/server/telemetryStore.ts   # สถานะสดและการส่งต่อ backend
-└── lib/workout/                   # state ของ workout, telemetry, camera, recording
+สภาพแวดล้อมที่ระบุในเอกสารโครงการประกอบด้วย Arduino Uno, ESP32 DevKit, เซนเซอร์ที่ต่อผ่าน ADC/UART/I2C, MongoDB ผ่าน Docker, FastAPI backend และ SvelteKit frontend การทดสอบการสื่อสารใช้ Serial monitor, I2C scanner และ diagnostic raw echo ตามบันทึก troubleshooting
 
-backend/app/
-├── routers/                       # auth, telemetry, sessions, calibration, users
-├── models/                        # schema ข้อมูล
-├── db.py                          # MongoDB และ index
-└── security.py                    # JWT และ password
-```
+วิธีทดสอบควรเริ่มจากแยกส่วน: ตรวจ Uno ส่งข้อความได้ก่อน จากนั้นตรวจ ESP32 รับ UART และอ่าน I2C ต่อด้วยตรวจ POST เข้า frontend, SSE ไป browser และการบันทึกเข้า backend เพื่อให้แยกสาเหตุได้เมื่อเกิดข้อผิดพลาด
 
-ผังนี้เป็นสรุปหน้าที่ของส่วนประกอบหลัก ไม่ได้รวมไฟล์ที่อยู่นอกขอบเขตแหล่งข้อมูลของรายงาน
+## 7.2 กรณีทดสอบและเกณฑ์ประเมินผล
 
-## 7.2 Arduino Uno: Timer1, ADC Interrupt, Watchdog และ UART
+| กรณี | วิธีตรวจ | เกณฑ์ผ่าน |
+|---|---|---|
+| Uno อ่าน ADC | เปลี่ยนสัญญาณที่ A0/A1 และดูข้อความ UART | ได้คู่ค่า `emg,fsr` ต่อเนื่องและรูปแบบถูกต้อง |
+| UART Uno-ESP32 | ต่อผ่าน voltage divider และดู log ESP32 | ESP32 parse ค่าได้ ไม่ค้างที่ศูนย์ |
+| Timer/ADC | ตรวจความต่อเนื่องของข้อมูลและรอบอ่าน | ไม่มีการหยุดยาวจน watchdog reset |
+| I2C | ใช้ scanner และตรวจ log ตอนเริ่มระบบ | พบ address ของอุปกรณ์ที่ต่ออยู่ |
+| HTTP telemetry | ตรวจ response ของ `/api/telemetry` | ได้ JSON response และ packet count เพิ่ม |
+| SSE | เปิดหน้า dashboard และถอด/ต่อ network | สถานะเปลี่ยนและ reconnect ได้ |
+| Authentication | เรียก endpoint แบบมี/ไม่มี token | endpoint ส่วนตัวปฏิเสธ request ที่ไม่มี token |
+| Calibration | GET/POST calibration ของผู้ใช้ | ค่าถูกบันทึกและสะท้อนใน live conversion |
+| Session result | จบเซตและบันทึกผล | ผลถูกสร้างและค้นย้อนหลังได้ |
 
-เฟิร์มแวร์ `uno_emg_fsr_link.ino` ใช้ Timer1 ในโหมด CTC โดยตั้ง prescaler 64 และค่า OCR1A ให้เกิด interrupt ที่ 100 Hz หรือทุก 10 ms เมื่อเกิด `TIMER1_COMPA_vect` จะตั้ง `FLAG_TIMER_TICK` ให้ loop เริ่มรอบอ่านใหม่
+เกณฑ์นี้เป็นกรอบสำหรับทดสอบจากโค้ดและ endpoint ที่มีอยู่ ไม่ใช่ผลการรับรองความแม่นยำของเซนเซอร์
 
-การอ่าน ADC ไม่ใช้ `analogRead()` แบบรอค้าง แต่เปิด ADC complete interrupt และเริ่ม conversion ที่ A0 สำหรับ EMG เมื่อเสร็จจะเก็บค่าและเริ่ม A1 สำหรับ FSR ต่อทันที เมื่อ FSR เสร็จ loop จะคัดลอกค่าด้วยช่วง `cli()`/`sei()` แล้วกลับด้าน FSR เพราะเซนเซอร์อ่านค่าสูงตอนพัก
+## 7.3 ผลการทดสอบและตัวอย่างผลลัพธ์
 
-CPU ใช้ `SLEEP_MODE_IDLE` ระหว่างรอ timer และ ADC interrupt ส่วน watchdog ตั้งไว้ 2 วินาทีและ reset เมื่อจบรอบอ่านครบ หากรอบอ่านไม่เดินต่อจะ reset อุปกรณ์
+จาก `TROUBLESHOOTING.md` มีผลการทดสอบหน้างานที่บันทึกไว้ดังนี้
 
-ค่าที่ได้จาก ADC 10-bit ถูก map เป็น 0-4095 แล้วส่งด้วย `Serial` ที่ 9600 baud เป็นรูปแบบ `emg,fsr` ต่อบรรทัด ผ่าน pin 0/1 ของ Uno ตามโค้ดปัจจุบัน
+- Uno อ่าน sEMG และ FSR ได้ และส่งข้อมูลออกทาง TX
+- การตรวจด้วย raw echo พบว่าลิงก์มี byte เข้ามา แต่ช่วงแรกหยุดที่ 1 byte จนแก้จุดต่อ voltage divider ให้แน่น
+- หลังแก้การต่อสายและเปลี่ยนมาใช้ Hardware Serial ของ Uno ข้อมูลรูปแบบ `<emg>,<fsr>\r\n` เข้ามาต่อเนื่อง
+- การตรวจ I2C ใช้แยกปัญหา bus รวมกับปัญหาเฉพาะอุปกรณ์ได้ โดยกรณีที่พบอุปกรณ์อื่นแต่ไม่พบ MLX90614 ชี้ไปที่สายของ MLX90614
+- การตั้ง baud ของ Serial monitor ต้องตรงกับอุปกรณ์ มิฉะนั้นจะเห็นข้อความเพี้ยน
 
-ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 2 เป็นรูปประกอบหัวข้อนี้
+สำหรับฝั่งเว็บและ backend โค้ดมีเส้นทางรับ telemetry, SSE, authentication, calibration, session result และ MongoDB index ครบตามที่ออกแบบไว้ แต่รายงานนี้ไม่เพิ่มตัวเลขผลการทดสอบที่ไม่ได้บันทึกไว้ในแหล่งข้อมูล
 
-## 7.3 ESP32: FreeRTOS, Hardware Timer, GPIO Interrupt, Watchdog, I2C และการส่งข้อมูล
+## 7.4 การวิเคราะห์ผลและข้อจำกัดที่พบ
 
-ESP32 แยกงานเป็น `SensorTask`, `NetworkTask`, `LcdTask` และ `ControlTask` ด้วย `xTaskCreatePinnedToCore()` โดย SensorTask อ่านข้อมูลถี่ที่สุด, NetworkTask ส่ง HTTP ทุก 250 ms, LcdTask อัปเดตจอทุก 200 ms และ ControlTask จัดการปุ่มกับสถานะการฝึก
+ผลจากการแก้ปัญหา UART แสดงว่าระบบมีความไวต่อทั้งการเลือกขา การใช้พอร์ตเดียวกันระหว่าง USB กับลิงก์บอร์ด และคุณภาพจุดต่อ voltage divider จึงควรทดสอบ hardware link แยกจากการทดสอบ parser
 
-hardware timer ใช้ปลุก semaphore ของรอบ sampling ที่ 100 Hz ส่วนปุ่ม GPIO32 และ GPIO33 ใช้ interrupt handler ส่ง event เข้า `buttonEventQueue` โดยใช้ตัวจับเวลาไมโครวินาทีเพื่อทำ debounce 250 ms ปุ่ม A ยังเป็น wake source ในโหมด light sleep ตามข้อจำกัดของบอร์ด
+การใช้ I2C bus ร่วมกันทำให้การตรวจด้วย address scanner มีประโยชน์มาก หากอุปกรณ์หายเพียงตัวเดียวควรตรวจสายและไฟเลี้ยงเฉพาะตัวนั้นก่อน แต่ถ้าหายพร้อมกันหลายตัวควรตรวจ SDA/SCL และ ground รวม
 
-watchdog ของ ESP32 ตั้ง timeout 5 วินาทีและเพิ่ม task หลักเข้า watchdog แต่ละ task เรียก `esp_task_wdt_reset()` หลังทำงาน ส่วนการอ่าน MPU, MAX30102, MLX90614 และ LCD ใช้ I2C bus ที่ SDA21/SCL22 และมี mutex ป้องกันการใช้งานร่วมกัน
+ข้อจำกัดของผลการทดสอบคือเอกสารที่ใช้ไม่ได้ระบุชุดข้อมูลอ้างอิงสำหรับวัดความแม่นยำของ EMG, FSR, HR หรือ SpO2 ดังนั้นผลที่สรุปได้ในบทนี้เป็นผลด้านการทำงานและการเชื่อมต่อ ไม่ใช่ผล validation ทางกายภาพ
 
-ข้อมูลจาก Uno อ่านผ่าน `Serial2` ที่ GPIO16/17 และ 9600 baud จากนั้น NetworkTask จะรวมข้อมูลใน JSON แล้วใช้ `HTTPClient.POST()` ส่งไปยัง URL ของ frontend
-
-ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 3 เป็นรูปประกอบหัวข้อนี้
-
-## 7.4 เว็บและเซิร์ฟเวอร์: รับ telemetry, กระจาย SSE, เริ่ม/หยุดบันทึก, ส่งต่อ FastAPI และเก็บ MongoDB
-
-Frontend route `POST /api/telemetry` รับ JSON จาก ESP32 แล้วเรียก `serverTelemetry.ingestFullTelemetry()` ส่วน `GET /api/telemetry/stream` ส่ง initial state และ event แบบ `telemetry` หรือ `button` ผ่าน SSE ให้ browser
-
-`telemetryStore` เก็บ raw buffer และสถานะล่าสุด คำนวณ EMG/FSR ที่ใช้แสดงผล และเรียก `forwardToBackend()` เพื่อส่งข้อมูลไป FastAPI ด้วย service token ฝั่ง backend มี `POST /v1/telemetry` สำหรับ machine-to-machine และ `GET /v1/telemetry` สำหรับ history ของผู้ใช้ที่ login แล้ว
-
-การเริ่ม/หยุดบันทึกใช้ `POST /api/recording` โดย frontend ตรวจสอบผู้ใช้ผ่าน FastAPI client และมี recording slot เดียวต่อ hardware rig ส่วน calibration proxy เรียก `GET/POST /v1/calibration` แล้ว mirror ค่ากลับเข้า in-memory store
-
-FastAPI สร้าง index ตอนเริ่มแอปและใช้ Motor เชื่อม MongoDB การสร้าง session result เขียนลง `session_results` ขณะที่ telemetry เขียนลง `telemetry_samples`
-
-## 7.5 เส้นทางข้อมูลแบบครบวงจรและตัวอย่างโค้ดสำคัญ
-
-เส้นทางข้อมูลหนึ่งรอบเริ่มจาก `ISR(TIMER1_COMPA_vect)` ของ Uno ตั้ง flag → ADC interrupt อ่าน A0/A1 → `Serial.print()` ส่งข้อความ → ESP32 `pollUnoLink()` parse บรรทัด → `SensorTask` อัปเดต `SharedState` → `NetworkTask` สร้าง JSON → `http.POST(payload)` → frontend `ingestFullTelemetry()` → SSE และ `forwardToBackend()` → FastAPI insert MongoDB
-
-ตัวอย่างจุดสำคัญที่ควรนำไปแสดงในรายงานฉบับเต็ม:
-
-- การตั้ง Timer1 และ ADC ISR ใน `uno_emg_fsr_link.ino`
-- การ parse `emg,fsr` และการอ่าน I2C ใน `esp32_workout_firmware.ino`
-- การสร้าง telemetry payload ใน NetworkTask
-- การ broadcast event ใน `frontend/src/routes/api/telemetry/stream/+server.ts`
-- การ insert ใน `backend/app/routers/telemetry.py`
-
-ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 1 เป็นรูปสรุปเส้นทางข้อมูล และ Flowchart 2-3 เป็นรายละเอียดฝั่งไมโครคอนโทรลเลอร์
-
-แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/uno_emg_fsr_link/board_config.h`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`
+แหล่งข้อมูล: `README.md`, `PINS.md`, `TROUBLESHOOTING.md`, โค้ดในสองโฟลเดอร์ Arduino และ `backend/`, `frontend/`, `backend/app/routers/`, `frontend/src/routes/api/`
