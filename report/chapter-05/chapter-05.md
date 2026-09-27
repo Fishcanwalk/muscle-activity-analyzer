@@ -8,6 +8,8 @@
 
 ความสัมพันธ์หลักคือผู้ใช้หนึ่งคนมี calibration ของตนเอง มี telemetry ที่ใช้ติดตามช่วงเวลา และมีผลเซสชันหลายรายการที่อ้างอิง `session_id` ได้ ข้อมูล authentication ใช้ `users` และ `refresh_tokens` รองรับการเข้าถึงข้อมูลส่วนตัว
 
+ดูแผนภาพความสัมพันธ์ระหว่าง collection ทั้งหมดได้ที่ [`../db-diagram.md`](../db-diagram.md)
+
 ## 5.2 Collections และฟิลด์สำคัญ
 
 | Collection | ฟิลด์สำคัญ | หน้าที่ |

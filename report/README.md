@@ -91,6 +91,8 @@
 
 แผนภาพ Mermaid สำหรับนำไปแคปภาพใส่รายงานอยู่ที่ [`flowchart.md`](flowchart.md) และมีจุดอ้างอิงในข้อ 2.2, 6.2, 6.3 และ 6.5
 
+แผนภาพฐานข้อมูล (ER Diagram) ของ MongoDB collections อยู่ที่ [`db-diagram.md`](db-diagram.md) มีจุดอ้างอิงในข้อ 5.1 และ 5.2
+
 ## เอกสารอธิบายโค้ดรวม
 
 คำอธิบาย firmware ทั้งสองไฟล์แบบรวมอยู่ที่ [`code-explanation.md`](code-explanation.md)
