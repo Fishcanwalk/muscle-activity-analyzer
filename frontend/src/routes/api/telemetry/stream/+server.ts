@@ -1,6 +1,12 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { serverTelemetry } from '$lib/server/telemetryStore';
 
+// Reverse proxies drop a response that has been silent for a while (nginx's
+// proxy_read_timeout defaults to 60 s), and the stream is silent whenever no board is
+// posting to this server. A comment line every 15 s keeps the connection alive; the
+// browser's EventSource ignores it.
+const HEARTBEAT_MS = 15_000;
+
 export const GET: RequestHandler = async () => {
 	let cleanup: (() => void) | null = null;
 
@@ -42,7 +48,16 @@ export const GET: RequestHandler = async () => {
 				}
 			});
 
+			const heartbeat = setInterval(() => {
+				try {
+					controller.enqueue(encoder.encode(': ping\n\n'));
+				} catch {
+					cleanup?.(); // client gone
+				}
+			}, HEARTBEAT_MS);
+
 			cleanup = () => {
+				clearInterval(heartbeat);
 				cleanupTelemetry();
 				cleanupButton();
 				cleanupEmgRep();
@@ -56,8 +71,10 @@ export const GET: RequestHandler = async () => {
 	return new Response(stream, {
 		headers: {
 			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache',
-			'Connection': 'keep-alive'
+			'Cache-Control': 'no-cache, no-transform',
+			'Connection': 'keep-alive',
+			// Tells nginx not to buffer this response, so events go out as they happen.
+			'X-Accel-Buffering': 'no'
 		}
 	});
 };
