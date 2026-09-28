@@ -22,9 +22,10 @@ flowchart TD
     ESP[ESP32]
     ReadI2C[/อ่าน MPU6050 หรือ MPU6500<br/>MAX30102 และ MLX90614 ผ่าน I2C/]
     Inputs[รับสถานะปุ่ม A/B<br/>และควบคุม LCD กับ buzzer]
-    Telemetry[รวมข้อมูลและสร้าง<br/>JSON]
-    HTTP[/HTTP POST ทุก 250 ms<br/>ไปยัง API/]
-    Web[Frontend SvelteKit<br/>รับค่าจาก API และส่ง SSE ไปหน้า Dashboard]
+    EmgWS[/"EMG ผ่าน WebSocket<br/>/ws/emg ทุก 20 ms"/]
+    Telemetry[รวมข้อมูลเซนเซอร์อื่น<br/>และปุ่มเป็น JSON]
+    HTTP[/"HTTP POST ทุก 100 ms<br/>ไปยัง /api/telemetry"/]
+    Web[Frontend SvelteKit<br/>รับ EMG และ telemetry<br/>แล้วส่งต่อไปหน้า Dashboard]
     Backend[Backend FastAPI<br/>ตรวจสอบและบันทึกข้อมูล]
     Mongo[(MongoDB)]
     Browser([Browser Dashboard])
@@ -38,18 +39,20 @@ flowchart TD
     ESP --> Inputs
     ReadI2C --> Telemetry
     Inputs --> Telemetry
-    ESP --> Telemetry
+    ESP --> EmgWS
+    EmgWS --> Web
     Telemetry --> HTTP
     HTTP --> Web
     Web --> Backend
     Backend --> Mongo
-    Web -->|SSE| Browser
+    Web -->|WebSocket: EMG| Browser
+    Web -->|SSE: เซนเซอร์อื่น| Browser
 
     classDef base fill:#ffffff,stroke:#222222,stroke-width:1.5px,color:#000000;
     classDef startend fill:#ffffff,stroke:#222222,stroke-width:2px,color:#000000;
     classDef io fill:#ffffff,stroke:#222222,stroke-width:1.5px,color:#000000;
     class Start,Browser startend;
-    class ReadAnalog,UART,ReadI2C,HTTP io;
+    class ReadAnalog,UART,ReadI2C,EmgWS,HTTP io;
     class Uno,Scale,ESP,Inputs,Telemetry,Web,Backend,Mongo base;
 ```
 
@@ -99,7 +102,7 @@ flowchart TD
     class Setup,TimerISR,StartEMG,ADCEMG,StartFSR,ADCFSR,Scale,Feed base;
 ```
 
-## Flowchart 3: ESP32 Task, I2C, UART, Interrupt และ API
+## Flowchart 3: ESP32 Task, I2C, UART, Interrupt, WebSocket และ API
 
 ตำแหน่งแนะนำในรายงาน: ข้อ 6.3
 
@@ -108,14 +111,17 @@ flowchart TD
 flowchart TD
     Start([เริ่มต้น ESP32])
     Init[ตั้งค่า Serial2, I2C, LCD<br/>Wi-Fi ปุ่ม และ watchdog]
-    Tasks[สร้าง 4 FreeRTOS tasks<br/>SensorTask, NetworkTask,<br/>LcdTask และ ControlTask]
+    Tasks[สร้าง 5 FreeRTOS tasks<br/>SensorTask, EmgStreamTask,<br/>NetworkTask, LcdTask และ ControlTask]
     Timer[Hardware timer<br/>ปลุก SensorTask ทุก 10 ms]
     Sensor[SensorTask<br/>อ่านข้อมูลตามรอบเวลา]
     UART[อ่าน emg,fsr<br/>จาก Uno ผ่าน UART]
     I2C[อ่าน MPU, MAX30102<br/>และ MLX90614 ผ่าน I2C]
-    State[อัปเดต SharedState<br/>และส่ง EMG เข้า queue]
-    Network[NetworkTask<br/>ทำงานทุก 250 ms]
-    JSON[สร้าง JSON telemetry<br/>จากข้อมูลล่าสุด]
+    State[อัปเดต SharedState<br/>และส่ง EMG เข้า emgQueue]
+    EmgTask[EmgStreamTask<br/>ทำงานทุก 20 ms]
+    EmgFrame[ดึง EMG ทั้งหมดจาก emgQueue<br/>ต่อเป็นข้อความ เช่น 2612,2618]
+    WS[/"WebSocketsClient.sendTXT<br/>ไปยัง /ws/emg"/]
+    Network[NetworkTask<br/>ทำงานทุก 100 ms]
+    JSON[สร้าง JSON telemetry<br/>ของเซนเซอร์อื่นและปุ่ม]
     POST[/HTTPClient.POST<br/>ไปยัง telemetry API/]
     ButtonISR[GPIO button ISR<br/>ตรวจ A/B และ debounce]
     ButtonQueue[buttonEventQueue]
@@ -134,6 +140,10 @@ flowchart TD
     Sensor --> I2C
     UART --> State
     I2C --> State
+    State --> EmgTask
+    EmgTask --> EmgFrame
+    EmgFrame --> WS
+    WS --> Timer
     State --> Network
     Network --> JSON
     JSON --> POST
@@ -145,6 +155,7 @@ flowchart TD
     State --> LCD
     Control --> LCD
     Sensor --> Watchdog
+    EmgTask --> Watchdog
     Network --> Watchdog
     LCD --> Watchdog
     Control --> Watchdog
@@ -159,9 +170,9 @@ flowchart TD
     classDef io fill:#ffffff,stroke:#222222,stroke-width:1.5px,color:#000000;
     classDef decision fill:#ffffff,stroke:#222222,stroke-width:1.5px,color:#000000;
     class Start startend;
-    class POST io;
+    class WS,POST io;
     class Idle decision;
-    class Init,Tasks,Timer,Sensor,UART,I2C,State,Network,JSON,ButtonISR,ButtonQueue,Control,LCD,Watchdog,Sleep,Wake base;
+    class Init,Tasks,Timer,Sensor,UART,I2C,State,EmgTask,EmgFrame,Network,JSON,ButtonISR,ButtonQueue,Control,LCD,Watchdog,Sleep,Wake base;
 ```
 
 ## หมายเหตุสำหรับการแคปภาพ

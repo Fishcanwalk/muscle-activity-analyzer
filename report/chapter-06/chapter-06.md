@@ -5,12 +5,15 @@
 ```text
 test-sensor/arduino/
 ├── uno_emg_fsr_link/              # Uno: ADC + Timer1 + UART
-└── esp32_workout_firmware/        # ESP32: FreeRTOS + I2C + Wi-Fi + HTTP
+└── esp32_workout_firmware/        # ESP32: FreeRTOS + I2C + Wi-Fi + HTTP + WebSocket
 
-frontend/src/
-├── routes/api/                    # endpoint รับ telemetry, SSE, recording, calibration
-├── lib/server/telemetryStore.ts   # สถานะสดและการส่งต่อ backend
-└── lib/workout/                   # state ของ workout, telemetry, camera, recording
+frontend/
+├── server.js                      # entry point ตอน production ต่อ WebSocket เข้ากับ SvelteKit
+├── emg-ws.js                      # WebSocket server ของ EMG ที่ /ws/emg
+└── src/
+    ├── routes/api/                # endpoint รับ telemetry, SSE, recording, calibration
+    ├── lib/server/telemetryStore.ts  # สถานะสด การแปลงค่า EMG และการส่งต่อ backend
+    └── lib/workout/               # state ของ workout, telemetry, camera, recording
 
 backend/app/
 ├── routers/                       # auth, telemetry, sessions, calibration, users
@@ -21,7 +24,7 @@ backend/app/
 
 ผังนี้เป็นสรุปหน้าที่ของส่วนประกอบหลัก ไม่ได้รวมไฟล์ที่อยู่นอกขอบเขตแหล่งข้อมูลของรายงาน
 
-telemetry ที่ส่งต่อกันในผังนี้มีโครงสร้างหลักเป็นกลุ่ม `emg`, `fsr`, `mpu`, `vitals`, `device`, `timestamp` และอาจมี `buttons` โดย backend schema อนุญาตฟิลด์เพิ่มเติมเพื่อให้รองรับข้อมูลจากอุปกรณ์ได้ยืดหยุ่น
+telemetry ที่ส่งต่อกันในผังนี้มีโครงสร้างหลักเป็นกลุ่ม `emg`, `fsr`, `mpu`, `vitals`, `device`, `timestamp` และอาจมี `buttons` โดย backend schema อนุญาตฟิลด์เพิ่มเติมเพื่อให้รองรับข้อมูลจากอุปกรณ์ได้ยืดหยุ่น ค่า EMG ดิบจากบอร์ดส่งแยกมาทาง WebSocket ส่วนกลุ่มอื่นส่งทาง HTTP POST แล้วเว็บเซิร์ฟเวอร์รวมกลับเป็น telemetry ก้อนเดียวก่อนส่งต่อ backend
 
 ## 6.2 Arduino Uno: Timer1, ADC Interrupt, Watchdog และ UART
 
@@ -264,10 +267,11 @@ Serial.println(fsrScaled);
 
 ### 6.3.1 ภาพรวมการทำงาน
 
-**การแบ่งงานเป็น Task:** ESP32 แบ่งงานออกเป็น 4 Task ที่ทำงานพร้อมกัน ได้แก่
+**การแบ่งงานเป็น Task:** ESP32 แบ่งงานออกเป็น 5 Task ที่ทำงานพร้อมกัน ได้แก่
 
 - `SensorTask`: อ่านข้อมูลเซนเซอร์ถี่ที่สุดเพื่อให้ได้ข้อมูลต่อเนื่อง
-- `NetworkTask`: ส่งข้อมูลผ่าน HTTP ไปยังเว็บไซต์ทุก 250 ms
+- `EmgStreamTask`: ส่งค่า EMG ผ่าน WebSocket ไปยังเว็บไซต์ทุก 20 ms
+- `NetworkTask`: ส่งข้อมูลเซนเซอร์อื่นและปุ่มผ่าน HTTP ไปยังเว็บไซต์ทุก 100 ms
 - `LcdTask`: อัปเดตข้อมูลบนจอ LCD ทุก 200 ms
 - `ControlTask`: รับเหตุการณ์จากปุ่มกดและจัดการสถานะการฝึก
 
@@ -281,7 +285,7 @@ Serial.println(fsrScaled);
 
 **การรับข้อมูลจาก Arduino Uno:** ESP32 รับค่า EMG และ FSR จาก Arduino Uno ผ่าน `Serial2` ที่ขา GPIO16/17 ด้วยความเร็ว 9600 baud
 
-**การส่งข้อมูลขึ้นเว็บไซต์:** NetworkTask นำค่าจาก Arduino Uno มารวมกับข้อมูลจากเซนเซอร์อื่นเป็น JSON ทุก 250 ms แล้วใช้ API เพื่อส่งค่าไปยังเว็บไซต์
+**การส่งข้อมูลขึ้นเว็บไซต์:** ใช้ 2 ช่องทาง EMG เป็นสัญญาณที่เปลี่ยนเร็วและต้องเห็นแบบเรียลไทม์ EmgStreamTask จึงเปิดการเชื่อมต่อ WebSocket ค้างไว้และส่งค่า EMG ทุก 20 ms ส่วน NetworkTask นำค่า FSR และข้อมูลจากเซนเซอร์อื่นมารวมเป็น JSON ทุก 100 ms แล้วส่งด้วย HTTP POST ซึ่งคำตอบของ POST ใช้ส่งคำสั่งจากเว็บกลับมาที่บอร์ดด้วย
 
 **การประหยัดพลังงาน:** เมื่อไม่มีการใช้งานนานครบ 5 นาที ESP32 จะเข้าสู่ Light Sleep และตื่นขึ้นมาทำงานต่อเมื่อกดปุ่ม A
 
@@ -309,7 +313,7 @@ for (int attempt = 0; attempt < 5 && !statusMpu; attempt++) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 875–887](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L875-L887)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 916–928](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L916-L928)
 
 ESP32 ใช้ช่องทางสื่อสาร 2 ช่อง ช่องแรกคือ UART สำหรับรับค่า EMG และ FSR จาก Arduino Uno (ขา GPIO16/17 ความเร็ว 9600 baud) ช่องที่สองคือ I2C bus (ขา SDA = GPIO21, SCL = GPIO22 ความเร็ว 100 kHz) ซึ่งเซนเซอร์ทั้งสามตัวและจอ LCD ใช้ร่วมกัน เมื่อเปิด I2C แล้ว จอ LCD จะขึ้นข้อความ `Booting...` ให้ผู้ใช้รู้ว่าเครื่องกำลังเริ่มระบบ
 
@@ -327,7 +331,7 @@ emgQueue = xQueueCreate(EMG_QUEUE_LEN, sizeof(int));
 buttonEventQueue = xQueueCreate(8, sizeof(uint8_t));
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 926–930](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L926-L930)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 967–971](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L967-L971)
 
 เครื่องมือเหล่านี้แบ่งเป็น 2 กลุ่ม กลุ่มแรกคือ mutex ใช้เป็น "กุญแจ" ของสิ่งที่หลาย task ใช้ร่วมกัน task ที่ถือกุญแจอยู่เท่านั้นจึงจะเข้าใช้ได้ ส่วนกลุ่มที่สองคือ semaphore และ queue ใช้ส่งสัญญาณหรือส่งข้อมูลจากส่วนหนึ่งของโปรแกรมไปยังอีกส่วน
 
@@ -336,34 +340,36 @@ buttonEventQueue = xQueueCreate(8, sizeof(uint8_t));
 | `stateMutex`          | Mutex             | กุญแจของข้อมูลกลาง`SharedState` ไม่ให้ task หนึ่งอ่านขณะที่อีก task กำลังเขียน |
 | `i2cMutex`            | Mutex             | กุญแจของ I2C bus ให้ใช้ได้ทีละ task                                                                             |
 | `sampleTickSemaphore` | Binary semaphore  | สัญญาณจาก hardware timer ที่ปลุก SensorTask ทุก 10 ms                                                             |
-| `emgQueue`            | Queue 64 ช่อง | ที่พักค่า EMG ทุกตัวอย่าง รอ NetworkTask มาเก็บไปส่งเป็นชุด                                  |
+| `emgQueue`            | Queue 64 ช่อง | ที่พักค่า EMG ทุกตัวอย่าง รอ EmgStreamTask มาเก็บไปส่งเป็นชุด                                  |
 | `buttonEventQueue`    | Queue 8 ช่อง  | ส่งหมายเลขปุ่มที่ถูกกดจาก interrupt ไปให้ ControlTask                                                  |
 
 #### 6.3.2.2 การแบ่งงานเป็น Task
 
-งานของ ESP32 แต่ละอย่างมีจังหวะเวลาต่างกัน การอ่านเซนเซอร์ต้องตรงทุก 10 ms แต่การส่ง HTTP อาจต้องรอเซิร์ฟเวอร์ตอบนานหลายร้อยมิลลิวินาที ถ้าเขียนทุกอย่างรวมไว้ในลูปเดียว การรอเครือข่ายจะทำให้การอ่านเซนเซอร์ช้าตามไปด้วย จึงแยกงานออกเป็น 4 task ที่มีลูปของตัวเอง และให้ FreeRTOS สลับเวลา CPU ให้แต่ละ task ตามความสำคัญ
+งานของ ESP32 แต่ละอย่างมีจังหวะเวลาต่างกัน การอ่านเซนเซอร์ต้องตรงทุก 10 ms แต่การส่ง HTTP อาจต้องรอเซิร์ฟเวอร์ตอบนานหลายร้อยมิลลิวินาที ถ้าเขียนทุกอย่างรวมไว้ในลูปเดียว การรอเครือข่ายจะทำให้การอ่านเซนเซอร์ช้าตามไปด้วย จึงแยกงานออกเป็น 5 task ที่มีลูปของตัวเอง และให้ FreeRTOS สลับเวลา CPU ให้แต่ละ task ตามความสำคัญ
 
 ```cpp
 xTaskCreatePinnedToCore(sensorTask, "SensorTask", 4096, nullptr, 3, &sensorTaskHandle, 1);
 xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, nullptr, 2, &networkTaskHandle, 0);
 xTaskCreatePinnedToCore(lcdTask, "LcdTask", 2560, nullptr, 1, &lcdTaskHandle, 1);
 xTaskCreatePinnedToCore(controlTask, "ControlTask", 2560, nullptr, 2, &controlTaskHandle, 1);
+xTaskCreatePinnedToCore(emgStreamTask, "EmgStreamTask", 6144, nullptr, 3, &emgStreamTaskHandle, 0);
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 953–956](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L953-L956)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 994–998](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L994-L998)
 
 | Task            | Stack (byte) | Priority         | Core | หน้าที่                                                                  |
 | --------------- | ------------ | ---------------- | ---- | ------------------------------------------------------------------------------- |
 | `SensorTask`  | 4096         | 3 (สูงสุด) | 1    | อ่านเซนเซอร์ทุก 10 ms ตาม hardware timer                      |
-| `NetworkTask` | 8192         | 2                | 0    | สร้าง JSON และส่ง HTTP POST ทุก 250 ms                            |
+| `EmgStreamTask` | 6144       | 3                | 0    | ส่งค่า EMG ผ่าน WebSocket ทุก 20 ms                               |
+| `NetworkTask` | 8192         | 2                | 0    | สร้าง JSON ของเซนเซอร์อื่นและส่ง HTTP POST ทุก 100 ms             |
 | `LcdTask`     | 2560         | 1 (ต่ำสุด) | 1    | อัปเดตจอ LCD ทุก 200 ms                                              |
 | `ControlTask` | 2560         | 2                | 1    | รับเหตุการณ์ปุ่ม ควบคุม buzzer และเข้า light sleep |
 
-SensorTask ได้ priority สูงสุด เมื่อถึงรอบอ่านเซนเซอร์ FreeRTOS จะหยุด task อื่นบน core เดียวกันไว้ก่อนแล้วให้ SensorTask ทำงานทันที ส่วน LcdTask ได้ priority ต่ำสุด เพราะถ้าจออัปเดตช้าไปเล็กน้อยผู้ใช้ก็แทบไม่สังเกตเห็น
+SensorTask ได้ priority สูงสุด เมื่อถึงรอบอ่านเซนเซอร์ FreeRTOS จะหยุด task อื่นบน core เดียวกันไว้ก่อนแล้วให้ SensorTask ทำงานทันที ส่วน LcdTask ได้ priority ต่ำสุด เพราะถ้าจออัปเดตช้าไปเล็กน้อยผู้ใช้ก็แทบไม่สังเกตเห็น EmgStreamTask ได้ priority สูงกว่า NetworkTask เพราะอยู่ core เดียวกัน ถ้า NetworkTask กำลังสร้าง JSON หรือรอคำตอบของ POST อยู่ EmgStreamTask จะแทรกเข้าไปส่ง EMG ได้ทันที กราฟ EMG บนเว็บจึงไม่สะดุดตามการรอ HTTP
 
-ESP32 มี CPU 2 core ระบบจึงแยก NetworkTask ไปไว้ที่ core 0 ซึ่งเป็น core เดียวกับที่ Wi-Fi ทำงาน ส่วน task อื่นอยู่ที่ core 1 ทำให้ขณะที่ NetworkTask รอเซิร์ฟเวอร์ตอบ การอ่านเซนเซอร์บนอีก core ยังเดินต่อได้ตามปกติ NetworkTask ได้ stack มากที่สุดเพราะต้องเก็บข้อความ JSON ทั้งก้อนไว้ในหน่วยความจำระหว่างสร้าง
+ESP32 มี CPU 2 core ระบบจึงแยก task ที่ใช้เครือข่ายทั้งสอง (EmgStreamTask และ NetworkTask) ไปไว้ที่ core 0 ซึ่งเป็น core เดียวกับที่ Wi-Fi ทำงาน ส่วน task อื่นอยู่ที่ core 1 ทำให้ขณะที่ task เครือข่ายรอเซิร์ฟเวอร์ การอ่านเซนเซอร์บนอีก core ยังเดินต่อได้ตามปกติ NetworkTask ได้ stack มากที่สุดเพราะต้องเก็บข้อความ JSON ทั้งก้อนไว้ในหน่วยความจำระหว่างสร้าง ส่วน EmgStreamTask ต้องใช้ stack ให้ไลบรารี WebSocket ทำงาน
 
-เมื่อสร้าง task ครบแล้ว งานทั้งหมดจะอยู่ใน task ทั้งสี่ `loop()` ของ Arduino จึงไม่เหลืองานให้ทำ และลบตัวเองทิ้งเพื่อคืนหน่วยความจำ
+เมื่อสร้าง task ครบแล้ว งานทั้งหมดจะอยู่ใน task ทั้งห้า `loop()` ของ Arduino จึงไม่เหลืองานให้ทำ และลบตัวเองทิ้งเพื่อคืนหน่วยความจำ
 
 ```cpp
 void loop() {
@@ -371,7 +377,7 @@ void loop() {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 966–968](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L966-L968)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 1009–1011](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L1009-L1011)
 
 #### 6.3.2.3 การจับเวลารอบ sampling ด้วย Hardware Timer
 
@@ -384,7 +390,7 @@ timerAlarm(sampleTimer, SAMPLE_INTERVAL_MS * 1000, (SAMPLE_TIMER_CONFIG_MASK & T
 timerStart(sampleTimer);
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 948–951](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L948-L951)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 989–992](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L989-L992)
 
 timer นับขึ้นหนึ่งครั้งทุก 1 µs เมื่อนับครบ 10,000 ครั้งหรือ 10 ms จะเกิด interrupt แล้วเริ่มนับใหม่เองโดยอัตโนมัติ จึงได้สัญญาณสม่ำเสมอที่ 100 Hz
 
@@ -398,7 +404,7 @@ void IRAM_ATTR onSampleTimer() {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 237–241](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L237-L241)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 249–253](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L249-L253)
 
 ฟังก์ชันนี้ถูกวางไว้ใน RAM ภายใน (`IRAM_ATTR`) เพื่อให้เริ่มทำงานได้ทันทีโดยไม่ต้องรออ่านโค้ดจาก flash และหลังจากส่งสัญญาณแล้ว ถ้า SensorTask สำคัญกว่างานที่ถูกขัดจังหวะไว้ ระบบจะสลับไปทำ SensorTask ทันทีเมื่อออกจาก interrupt โดยไม่ต้องรอให้งานเดิมทำจนเสร็จ
 
@@ -418,7 +424,7 @@ void sensorTask(void *pvParameters) {
     // ...
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 571–580](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L571-L580)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 586–595](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L586-L595)
 
 ระหว่างรอ SensorTask ไม่ใช้ CPU เลย CPU จึงว่างไปทำ task อื่นได้ เมื่อได้รับสัญญาณ SensorTask จะรายงานตัวกับ watchdog (หัวข้อ 6.3.2.7) อ่านเซนเซอร์หนึ่งรอบ แล้ววนกลับมารอสัญญาณครั้งถัดไป รอบการอ่านจึงตรงทุก 10 ms ตามจังหวะของ hardware timer
 
@@ -452,7 +458,7 @@ void pollUnoLink() {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 266–291](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L266-L291)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 278–302](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L278-L302)
 
 1. ทุกรอบ ฟังก์ชันจะรับตัวอักษรที่มาถึงแล้วทั้งหมด นำไปต่อท้ายข้อความที่สะสมไว้ ถ้าข้อความยาวผิดปกติเกิน 32 ตัวอักษรจะไม่เก็บเพิ่ม เพื่อไม่ให้ข้อมูลล้นพื้นที่ที่เตรียมไว้
 2. เมื่อเจอตัวขึ้นบรรทัดใหม่ แสดงว่าได้ข้อความครบหนึ่งรอบแล้ว จึงแยกข้อความตรงเครื่องหมายจุลภาคออกเป็นตัวเลข 2 ค่า
@@ -460,7 +466,7 @@ void pollUnoLink() {
 4. ข้อความที่มายังไม่ครบบรรทัดจะถูกเก็บไว้ข้ามรอบ แล้วนำมาต่อกับตัวอักษรที่มาถึงในรอบถัดไป
 5. ปกติ Uno ส่งข้อมูลมาทุก 10 ms ถ้าไม่ได้รับข้อมูลเลยนานเกิน 500 ms ระบบจะถือว่าการเชื่อมต่อกับ Uno ขาด และแจ้งทาง Serial Monitor
 
-ค่า EMG และ FSR ที่ได้จากขั้นนี้จะถูกนำไปใช้ต่อใน SensorTask โดยค่า EMG จะถูกส่งต่อให้ NetworkTask ผ่าน queue (หัวข้อ 6.3.2.8)
+ค่า EMG และ FSR ที่ได้จากขั้นนี้จะถูกนำไปใช้ต่อใน SensorTask โดยค่า EMG จะถูกส่งต่อให้ EmgStreamTask ผ่าน queue (หัวข้อ 6.3.2.8)
 
 #### 6.3.2.5 การอ่านเซนเซอร์บน I2C bus และการใช้ Mutex
 
@@ -498,7 +504,7 @@ if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 594–638](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L594-L638)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 609–658](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L609-L658)
 
 - ถ้ารอกุญแจเกิน 20 ms แล้วยังไม่ได้ เช่น LcdTask กำลังเขียนจออยู่ SensorTask จะข้ามการอ่าน I2C ในรอบนั้นไปเลย เพื่อไม่ให้รอบ sampling ถัดไปเลื่อนออกไป
 - อ่านเฉพาะเซนเซอร์ที่เริ่มต้นสำเร็จตอนเปิดเครื่อง (หัวข้อ 6.3.2.1) เซนเซอร์ที่ใช้งานไม่ได้จะถูกข้ามไป
@@ -516,7 +522,7 @@ uint8_t mpuReadReg(uint8_t reg) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 293–299](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L293-L299)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 305–311](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L305-L311)
 
 การอ่านค่าผ่าน I2C ทำเป็น 2 จังหวะ จังหวะแรก ESP32 บอก MPU (address `0x68`) ว่าต้องการอ่าน register ใด จังหวะที่สองจึงขอข้อมูลกลับมา ระหว่างสองจังหวะนี้ ESP32 ยังไม่ปล่อย bus (repeated start) MPU จึงรู้ว่าคำขอข้อมูลเป็นส่วนต่อของคำสั่งก่อนหน้า ถ้า MPU ไม่ตอบกลับ ฟังก์ชันจะคืนค่า `0xFF` แทน โปรแกรมจึงไม่ค้างรอ
 
@@ -538,9 +544,9 @@ if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 640–650](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L640-L650)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 660–670](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L660-L670)
 
-นอกจากค่าล่าสุดแล้ว SensorTask ยังเก็บความเร็วสูงสุดที่เจอไว้ด้วย เพราะ NetworkTask ส่งข้อมูลทุก 250 ms ถ้าส่งเฉพาะค่าล่าสุด จังหวะที่ยกน้ำหนักเร็วที่สุดอาจเกิดขึ้นระหว่างรอบส่งแล้วหายไปโดยไม่ถูกส่ง
+นอกจากค่าล่าสุดแล้ว SensorTask ยังเก็บความเร็วสูงสุดที่เจอไว้ด้วย เพราะ NetworkTask ส่งข้อมูลทุก 100 ms ถ้าส่งเฉพาะค่าล่าสุด จังหวะที่ยกน้ำหนักเร็วที่สุดอาจเกิดขึ้นระหว่างรอบส่งแล้วหายไปโดยไม่ถูกส่ง
 
 #### 6.3.2.6 การรับสัญญาณจากปุ่มด้วย GPIO Interrupt
 
@@ -560,7 +566,7 @@ gpio_isr_handler_add((gpio_num_t)BUTTON_A_PIN, buttonA_isr, nullptr);
 gpio_isr_handler_add((gpio_num_t)BUTTON_B_PIN, buttonB_isr, nullptr);
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 936–946](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L936-L946)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 977–987](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L977-L987)
 
 ขาของปุ่มเปิดตัวต้านทาน pull-up ภายในไว้ ขณะที่ไม่ได้กด ขาจึงเป็น HIGH และเมื่อกดปุ่ม ขาจะเปลี่ยนเป็น LOW ระบบตั้งให้เกิด interrupt ตอนสัญญาณเปลี่ยนจาก HIGH เป็น LOW ซึ่งก็คือจังหวะที่เริ่มกดปุ่ม แต่ละปุ่มมีฟังก์ชันรับ interrupt ของตัวเอง
 
@@ -578,7 +584,7 @@ void IRAM_ATTR buttonA_isr(void *arg) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 246–254](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L246-L254)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 258–266](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L258-L266)
 
 ทุกครั้งที่เกิด interrupt ฟังก์ชันจะดูเวลาปัจจุบันแบบละเอียดระดับไมโครวินาที ถ้าห่างจากครั้งก่อนไม่ถึง 250 ms จะถือว่าเป็นสัญญาณเด้งและไม่สนใจ ถ้าห่างพอจะถือว่าเป็นการกดครั้งใหม่ แล้วส่งหมายเลขปุ่ม (A = 0, B = 1) เข้าคิวให้ ControlTask ฟังก์ชันนี้ไม่ได้เปลี่ยนสถานะการฝึกเอง เพราะการเปลี่ยนสถานะต้องรอกุญแจ `stateMutex` ซึ่งไม่ควรทำใน interrupt จึงส่งต่อให้ ControlTask จัดการแทน
 
@@ -614,7 +620,7 @@ if (xQueueReceive(buttonEventQueue, &buttonId, pdMS_TO_TICKS(100)) == pdTRUE && 
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 787–813](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L787-L813)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 828–854](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L828-L854)
 
 1. ControlTask รอ 30 ms ให้สัญญาณนิ่งก่อน แล้วอ่านสถานะปุ่มอีกครั้ง ถ้าปุ่มยังถูกกดอยู่จึงนับว่าเป็นการกดจริง ขั้นนี้ช่วยกรองสัญญาณรบกวนที่ทำให้เกิด interrupt ทั้งที่ผู้ใช้ไม่ได้กด
 2. ถ้าผู้ใช้กดปุ่มค้างไว้ ระบบจะนับเพียงครั้งเดียว และต้องปล่อยปุ่มก่อนจึงจะนับการกดครั้งถัดไปได้
@@ -638,7 +644,7 @@ void initWatchdog() {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 520–529](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L520-L529)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 532–541](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L532-L541)
 
 เมื่อหมดเวลา watchdog จะทำให้ระบบ panic และรีสตาร์ทบอร์ด watchdog ตัวนี้เฝ้าเฉพาะ task ที่ระบบลงทะเบียนไว้เอง ไม่ได้เฝ้า task พื้นฐานของระบบ นอกจากนี้ ESP32 Arduino core อาจเปิด watchdog ไว้ก่อนแล้วตั้งแต่บูต ถ้าเปิดซ้ำไม่สำเร็จ ระบบจะเปลี่ยนค่าของ watchdog ที่เปิดอยู่ให้เป็นค่าที่ต้องการแทน
 
@@ -649,32 +655,27 @@ esp_task_wdt_add(sensorTaskHandle);
 esp_task_wdt_add(networkTaskHandle);
 esp_task_wdt_add(lcdTaskHandle);
 esp_task_wdt_add(controlTaskHandle);
+esp_task_wdt_add(emgStreamTaskHandle);
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 958–961](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L958-L961)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 1000–1004](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L1000-L1004)
 
 watchdog ติดตามแยกเป็นราย task ทุก task ที่ลงทะเบียนต้องรายงานตัวภายใน 8 วินาที ถ้า task ใดค้าง แม้จะเป็นเพียงตัวเดียวและ task อื่นยังทำงานปกติ บอร์ดก็จะถูกรีสตาร์ท แต่ละ task จึงรายงานตัวที่ต้นลูปทุกรอบ ส่วน NetworkTask รายงานตัวอีกครั้งหลังส่ง HTTP เสร็จ เพราะรอบที่เครือข่ายช้าอาจใช้เวลารอนานหลายวินาที
 
-#### 6.3.2.8 การส่งข้อมูลขึ้นเว็บไซต์ใน NetworkTask
+#### 6.3.2.8 การส่งข้อมูลขึ้นเว็บไซต์ใน EmgStreamTask และ NetworkTask
 
-NetworkTask นำค่าจาก Arduino Uno มารวมกับข้อมูลจากเซนเซอร์อื่นเป็น JSON ทุก 250 ms แล้วส่งไปยัง API `POST /api/telemetry` ของเว็บไซต์ ก่อนเริ่มส่ง ระบบเตรียมตัวส่ง HTTP ไว้หนึ่งครั้ง
+ข้อมูลจากบอร์ดแบ่งส่งเป็น 2 ช่องทางตามลักษณะของข้อมูล
 
-```cpp
-void setupHttpClient() {
-  http.end();
-  http.begin(httpClient, serverUrl);
-  http.addHeader("Content-Type", "application/json");
-  http.setReuse(true);
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-}
-```
+| ช่องทาง | Task | รอบส่ง | ข้อมูล |
+| --- | --- | --- | --- |
+| WebSocket `/ws/emg?role=device` | `EmgStreamTask` | 20 ms | ค่า EMG ดิบทุกตัวอย่าง |
+| HTTP `POST /api/telemetry` | `NetworkTask` | 100 ms | FSR, MPU, ชีพจร, อุณหภูมิ และเหตุการณ์กดปุ่ม |
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 213–220](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L213-L220)
+EMG เปลี่ยนเร็วและหน้าเว็บต้องวาดกราฟให้ต่อเนื่อง ถ้าส่งด้วย HTTP ทุกครั้งต้องมี header ซ้ำและต้องรอคำตอบก่อนส่งรอบถัดไป ส่วน WebSocket เปิดการเชื่อมต่อค้างไว้ครั้งเดียวแล้วส่งข้อความต่อเนื่องได้ทันทีโดยไม่ต้องรอคำตอบ overhead ต่อข้อความจึงต่ำกว่ามาก ส่วนเซนเซอร์อื่นเปลี่ยนช้ากว่า และคำตอบของ POST ใช้ส่งคำสั่งจากเว็บกลับมาที่บอร์ดอยู่แล้ว จึงยังใช้ HTTP ต่อ
 
-การเปิดการเชื่อมต่อกับเซิร์ฟเวอร์ใหม่ทุกครั้งใช้เวลา ระบบจึงเปิดการเชื่อมต่อไว้ครั้งเดียวแล้วใช้ซ้ำทุกรอบ (keep-alive) และจำกัดเวลารอไว้ คือรอเชื่อมต่อได้ไม่เกิน 1.5 วินาที และรอคำตอบได้ไม่เกิน 3 วินาที เวลารอรวมจึงสั้นกว่า 8 วินาทีของ watchdog แม้เครือข่ายจะช้า บอร์ดก็จะไม่ถูกรีสตาร์ท
+**(ก) การส่ง EMG ผ่าน WebSocket**
 
-ข้อมูลส่วนใหญ่ เช่น แรงกด ความเร็ว และอัตราการเต้นของหัวใจ ส่งเพียงค่าล่าสุดของแต่ละรอบก็พอ แต่ค่า EMG ต้องส่งขึ้นเว็บให้ครบทุกตัวอย่าง เพื่อให้หน้าเว็บวาดกราฟสัญญาณกล้ามเนื้อได้ต่อเนื่อง ปัญหาคือ SensorTask ได้ค่า EMG ใหม่ทุก 10 ms ขณะที่ NetworkTask ส่งข้อมูลเพียงทุก 250 ms จึงต้องมีที่พักข้อมูลระหว่างสอง task นี้ SensorTask จะใส่ค่า EMG ที่รับจาก Uno (หัวข้อ 6.3.2.4) ลง `emgQueue` ทุกรอบ แล้ว NetworkTask มาเก็บออกไปส่งทีเดียวทั้งชุด
+ข้อมูลส่วนใหญ่ เช่น แรงกด ความเร็ว และอัตราการเต้นของหัวใจ ส่งเพียงค่าล่าสุดของแต่ละรอบก็พอ แต่ค่า EMG ต้องส่งขึ้นเว็บให้ครบทุกตัวอย่าง ปัญหาคือ SensorTask ได้ค่า EMG ใหม่ทุก 10 ms ขณะที่ EmgStreamTask ส่งทุก 20 ms และการส่งแต่ละครั้งอาจช้าลงเมื่อเครือข่ายไม่ดี จึงต้องมีที่พักข้อมูลระหว่างสอง task นี้ SensorTask จะใส่ค่า EMG ที่รับจาก Uno (หัวข้อ 6.3.2.4) ลง `emgQueue` ทุกรอบ แล้ว EmgStreamTask มาเก็บออกไปส่งทีเดียวทั้งชุด
 
 ```cpp
 if (xQueueSend(emgQueue, &emgVal, 0) != pdTRUE) {
@@ -684,11 +685,69 @@ if (xQueueSend(emgQueue, &emgVal, 0) != pdTRUE) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 587–591](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L587-L591)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 602–606](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L602-L606)
 
-queue มี 64 ช่อง พอเก็บข้อมูลได้ประมาณ 640 ms ถ้าเครือข่ายช้าจน NetworkTask มาเก็บไม่ทันและ queue เต็ม ระบบจะทิ้งค่าที่เก่าที่สุดหนึ่งค่าเพื่อเปิดที่ให้ค่าใหม่ โดย SensorTask ไม่ต้องหยุดรอ ข้อมูลที่ส่งขึ้นเว็บจึงเป็นช่วงล่าสุดเสมอ
+queue มี 64 ช่อง พอเก็บข้อมูลได้ประมาณ 640 ms ถ้าเครือข่ายช้าจน EmgStreamTask มาเก็บไม่ทันและ queue เต็ม ระบบจะทิ้งค่าที่เก่าที่สุดหนึ่งค่าเพื่อเปิดที่ให้ค่าใหม่ โดย SensorTask ไม่ต้องหยุดรอ ข้อมูลที่ส่งขึ้นเว็บจึงเป็นช่วงล่าสุดเสมอ
 
-ฝั่ง NetworkTask ในแต่ละรอบจึงเริ่มจากการดึงค่า EMG ที่สะสมไว้ใน queue ออกมา
+EmgStreamTask ใช้ไลบรารี WebSockets (by Markus Sattler) ผ่านคลาส `WebSocketsClient`
+
+```cpp
+void emgStreamTask(void *pvParameters) {
+  emgSocket.begin(SERVER_HOST, SERVER_PORT, EMG_WS_PATH);
+  emgSocket.onEvent(onEmgSocketEvent);
+  emgSocket.setReconnectInterval(EMG_WS_RECONNECT_MS);
+
+  TickType_t lastWake = xTaskGetTickCount();
+  for (;;) {
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(EMG_STREAM_INTERVAL_MS));
+    esp_task_wdt_reset();
+
+    if (WiFi.status() == WL_CONNECTED) emgSocket.loop();
+
+    char frame[EMG_QUEUE_LEN * 6];
+    int pos = 0;
+    int count = 0;
+    int sample;
+    while (pos < (int)sizeof(frame) - 8 && xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
+      pos += snprintf(frame + pos, sizeof(frame) - pos, "%s%d", count == 0 ? "" : ",", sample);
+      count++;
+    }
+    if (count > 0 && emgSocket.isConnected()) emgSocket.sendTXT(frame, pos);
+  }
+}
+```
+
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 772–794](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L772-L794)
+
+1. ตอนเริ่ม task จะตั้งปลายทางของ WebSocket เป็น `SERVER_HOST:SERVER_PORT/ws/emg?role=device` พารามิเตอร์ `role=device` บอกเซิร์ฟเวอร์ว่าการเชื่อมต่อนี้มาจากบอร์ด ไม่ใช่ browser และตั้งให้ต่อใหม่เองทุก 2 วินาทีเมื่อการเชื่อมต่อหลุด
+2. task ตื่นทุก 20 ms โดยนับจากเวลาที่ตื่นครั้งก่อน เหมือน NetworkTask แล้วรายงานตัวกับ watchdog
+3. `emgSocket.loop()` เป็นจุดที่ไลบรารีทำงานเบื้องหลัง เช่น เชื่อมต่อใหม่ ตอบ ping จากเซิร์ฟเวอร์ และรับข้อความ ต้องเรียกสม่ำเสมอ การเชื่อมต่อจึงไม่ถูกตัด
+4. ดึงค่า EMG ที่สะสมอยู่ในคิวออกมาทั้งหมด แล้วต่อกันเป็นข้อความคั่นด้วยจุลภาค ปกติได้ 2 ค่าต่อรอบ เพราะ sample ทุก 10 ms แต่ส่งทุก 20 ms เช่น `2612,2618` ข้อความนี้สั้นกว่า JSON มาก และสร้างในพื้นที่ขนาดคงที่ไม่ต้องขอหน่วยความจำเพิ่ม
+5. ถ้าเชื่อมต่ออยู่จะส่งด้วย `sendTXT()` ซึ่งไม่ต้องรอคำตอบ ถ้าการเชื่อมต่อหลุด ค่าที่ดึงออกมาในรอบนั้นจะถูกทิ้งไป ไม่ส่งย้อนหลัง เพราะกราฟสดต้องการค่าปัจจุบันมากกว่าค่าที่ค้างมา
+
+ตำแหน่งของเซิร์ฟเวอร์รวมไว้ที่ `SERVER_HOST` และ `SERVER_PORT` จุดเดียว ทั้ง WebSocket และ URL ของ HTTP POST สร้างจากสองค่านี้ เวลาย้ายเครื่องเซิร์ฟเวอร์จึงแก้เพียงที่เดียว
+
+**(ข) การส่งเซนเซอร์อื่นผ่าน HTTP POST**
+
+NetworkTask นำค่า FSR มารวมกับข้อมูลจากเซนเซอร์อื่นเป็น JSON ทุก 100 ms แล้วส่งไปยัง API `POST /api/telemetry` ของเว็บไซต์ ก่อนเริ่มส่ง ระบบเตรียมตัวส่ง HTTP ไว้หนึ่งครั้ง
+
+```cpp
+void setupHttpClient() {
+  http.end();
+  http.begin(httpClient, serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setReuse(true);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  tcpNoDelaySet = false;
+}
+```
+
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 224–232](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L224-L232)
+
+การเปิดการเชื่อมต่อกับเซิร์ฟเวอร์ใหม่ทุกครั้งใช้เวลา ระบบจึงเปิดการเชื่อมต่อไว้ครั้งเดียวแล้วใช้ซ้ำทุกรอบ (keep-alive) และจำกัดเวลารอไว้ คือรอเชื่อมต่อได้ไม่เกิน 1.5 วินาที และรอคำตอบได้ไม่เกิน 3 วินาที เวลารอรวมจึงสั้นกว่า 8 วินาทีของ watchdog แม้เครือข่ายจะช้า บอร์ดก็จะไม่ถูกรีสตาร์ท หลังส่งสำเร็จครั้งแรกของการเชื่อมต่อแต่ละครั้ง ระบบจะเปิด TCP_NODELAY เพื่อให้ packet เล็ก ๆ ถูกส่งออกทันทีโดยไม่ถูกรอรวมกัน ตัวแปร `tcpNoDelaySet` จึงถูกล้างทุกครั้งที่เตรียมการเชื่อมต่อใหม่
+
+ในแต่ละรอบ NetworkTask ตรวจก่อนว่าพร้อมส่งหรือไม่
 
 ```cpp
 for (;;) {
@@ -700,25 +759,13 @@ for (;;) {
   if (consecutiveFailures >= HTTP_MAX_CONSECUTIVE_FAILURES && (int32_t)(xTaskGetTickCount() - retryAfter) < 0) {
     continue;
   }
-
-  char emgArray[400];
-  int pos = snprintf(emgArray, sizeof(emgArray), "[");
-  int sentBatchSize = 0;
-  int sample;
-  while (xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
-    pos += snprintf(emgArray + pos, sizeof(emgArray) - pos, "%s%d", sentBatchSize == 0 ? "" : ",", sample);
-    sentBatchSize++;
-    if (pos >= (int)sizeof(emgArray) - 8) break;
-  }
-  snprintf(emgArray + pos, sizeof(emgArray) - pos, "]");
   // ...
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 671–690](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L671-L690)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 691–699](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L691-L699)
 
-1. NetworkTask ตื่นขึ้นทุก 250 ms โดยนับจากเวลาที่ตื่นครั้งก่อน ไม่ได้นับจากเวลาที่ทำงานเสร็จ รอบที่ใช้เวลาประมวลผลนานจึงไม่ทำให้รอบถัดไปเลื่อนออกไป
-2. ก่อนส่งจะตรวจว่าพร้อมส่งหรือไม่ ถ้า Wi-Fi ยังไม่เชื่อมต่อจะข้ามรอบนี้ไป และถ้าส่งไม่สำเร็จติดกันครบ 3 ครั้ง จะพักการส่งไว้ 1 วินาทีก่อนลองใหม่ (backoff)
-3. ดึงค่า EMG ที่สะสมอยู่ในคิวออกมาทั้งหมด แล้วเรียงต่อกันเป็นรายการ เช่น `[512,530,498,...]` ที่ 100 Hz ในรอบ 250 ms จะได้ประมาณ 25 ค่า ถ้ารายการยาวจนเกือบเต็มพื้นที่ 400 ตัวอักษรที่เตรียมไว้ จะหยุดดึงก่อน
+1. NetworkTask ตื่นขึ้นทุก 100 ms โดยนับจากเวลาที่ตื่นครั้งก่อน ไม่ได้นับจากเวลาที่ทำงานเสร็จ รอบที่ใช้เวลาประมวลผลนานจึงไม่ทำให้รอบถัดไปเลื่อนออกไป
+2. ถ้า Wi-Fi ยังไม่เชื่อมต่อจะข้ามรอบนี้ไป และถ้าส่งไม่สำเร็จติดกันครบ 3 ครั้ง จะพักการส่งไว้ 1 วินาทีก่อนลองใหม่ (backoff)
 
 จากนั้นคัดลอกข้อมูลกลางทั้งหมดออกมา แล้วประกอบเป็นข้อความ JSON
 
@@ -738,28 +785,28 @@ if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
 char payload[768];
 snprintf(payload, sizeof(payload),
          "{\"board\":\"esp32\","
-         "\"emg\":{\"raw\":%s},"
          "\"fsr\":{\"force\":%d,\"stability\":%.1f},"
          "\"mpu\":{\"velocity\":%.3f,\"peakVelocity\":%.3f},"
          "\"vitals\":{\"hr\":%d,\"spo2\":%.1f,\"skinTemp\":%.2f,\"deltaTemp\":%.2f},"
          "\"buttons\":{\"a\":%s,\"b\":%s}}",
-         emgArray, snap.fsrLatest, snap.fsrStability,
+         snap.fsrLatest, snap.fsrStability,
          snap.velocity, snap.peakVelocity,
          snap.beatAvg, snap.spo2Estimate, snap.skinTemp, snap.deltaTemp,
          sentButtonA ? "true" : "false", sentButtonB ? "true" : "false");
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 692–715](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L692-L715)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 701–723](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L701-L723)
 
 - NetworkTask ถือกุญแจ `stateMutex` เพียงช่วงสั้น ๆ ที่คัดลอกข้อมูลออกมาเท่านั้น แล้วจึงคืนกุญแจก่อนสร้าง JSON ซึ่งใช้เวลานานกว่า SensorTask จึงไม่ต้องรอกุญแจนาน
-- หลังคัดลอก ความเร็วสูงสุดจะถูกตั้งกลับเป็นความเร็วปัจจุบัน เพื่อเริ่มจับค่าสูงสุดของรอบถัดไปใหม่ ค่าที่ส่งจึงเป็นความเร็วสูงสุดของแต่ละช่วง 250 ms
+- หลังคัดลอก ความเร็วสูงสุดจะถูกตั้งกลับเป็นความเร็วปัจจุบัน เพื่อเริ่มจับค่าสูงสุดของรอบถัดไปใหม่ ค่าที่ส่งจึงเป็นความเร็วสูงสุดของแต่ละช่วง 100 ms
 - เครื่องหมายการกดปุ่มจะถูกล้างทันทีหลังคัดลอก เพื่อไม่ให้ส่งเหตุการณ์กดปุ่มเดิมซ้ำในรอบถัดไป
+- JSON ไม่มีกลุ่ม `emg` แล้ว เพราะ EMG ส่งทาง WebSocket (ข้อ ก)
 - ข้อความ JSON ถูกสร้างลงในพื้นที่ขนาดคงที่ 768 ไบต์ที่เตรียมไว้ โดยไม่ใช้ไลบรารี JSON ระบบจึงไม่ต้องขอหน่วยความจำเพิ่มระหว่างทำงาน ซึ่งช่วยป้องกันหน่วยความจำไม่พอเมื่อเครื่องเปิดใช้งานนาน ๆ
 
 ตัวอย่าง payload ที่ได้
 
 ```json
-{"board":"esp32","emg":{"raw":[512,530,498]},"fsr":{"force":1820,"stability":92.5},"mpu":{"velocity":0.215,"peakVelocity":0.340},"vitals":{"hr":88,"spo2":97.5,"skinTemp":33.10,"deltaTemp":0.45},"buttons":{"a":false,"b":false}}
+{"board":"esp32","fsr":{"force":1820,"stability":92.5},"mpu":{"velocity":0.215,"peakVelocity":0.340},"vitals":{"hr":88,"spo2":97.5,"skinTemp":33.10,"deltaTemp":0.45},"buttons":{"a":false,"b":false}}
 ```
 
 สุดท้ายจึงส่งข้อมูลและจัดการผลลัพธ์
@@ -770,6 +817,7 @@ esp_task_wdt_reset();
 // ...
 if (code > 0) {
   consecutiveFailures = 0;
+  // ...
   applyServerReply(http.getString());
   // ...
 } else {
@@ -792,10 +840,10 @@ if (code > 0) {
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 718–751](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L718-L751)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 726–763](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L726-L763)
 
 - ถ้าส่งสำเร็จ ตัวนับความผิดพลาดจะกลับเป็น 0 และระบบจะอ่านคำตอบจากเซิร์ฟเวอร์ ซึ่งมีค่า calibration ของ FSR (`fsrZero`, `fsrMax`) และคำสั่งทดสอบ buzzer (`beep`) ที่ผู้ใช้ตั้งไว้จากหน้าเว็บ ช่องทางนี้ทำให้หน้าเว็บส่งคำสั่งกลับมายังอุปกรณ์ได้โดยไม่ต้องเปิดการเชื่อมต่อแยก
-- ถ้าส่งไม่สำเร็จ ระบบจะเตรียมตัวส่ง HTTP ใหม่เผื่อการเชื่อมต่อเดิมเสีย และเมื่อผิดพลาดติดกันครบ 3 ครั้งจะพักการส่ง 1 วินาที เพื่อไม่ให้ส่งซ้ำถี่ ๆ ขณะที่เซิร์ฟเวอร์ติดต่อไม่ได้
+- ถ้าส่งไม่สำเร็จ ระบบจะเตรียมตัวส่ง HTTP ใหม่เผื่อการเชื่อมต่อเดิมเสีย และเมื่อผิดพลาดติดกันครบ 3 ครั้งจะพักการส่ง 1 วินาที เพื่อไม่ให้ส่งซ้ำถี่ ๆ ขณะที่เซิร์ฟเวอร์ติดต่อไม่ได้ ระหว่างนี้ EMG ยังส่งผ่าน WebSocket ได้ตามปกติ เพราะอยู่คนละ task
 - ถ้ารอบที่ส่งไม่สำเร็จมีเหตุการณ์กดปุ่มอยู่ด้วย ระบบจะทำเครื่องหมายไว้ใหม่ให้ส่งอีกครั้งในรอบถัดไป ข้อมูลเซนเซอร์ที่หายไปหนึ่งรอบไม่ส่งผลมากนักเพราะรอบถัดไปก็มีค่าใหม่มาแทน แต่การกดปุ่มเปลี่ยนสถานะการฝึก จึงต้องไม่หายไประหว่างที่เครือข่ายมีปัญหา
 
 #### 6.3.2.9 การประหยัดพลังงานด้วย Light Sleep
@@ -811,6 +859,7 @@ void enterLightSleepUntilWake() {
   esp_task_wdt_delete(networkTaskHandle);
   esp_task_wdt_delete(lcdTaskHandle);
   esp_task_wdt_delete(controlTaskHandle);
+  esp_task_wdt_delete(emgStreamTaskHandle);
   esp_task_wdt_deinit();
 
   if (SLEEP_WAKE_SOURCE_MASK & WAKE_SRC_EXT0) {
@@ -828,12 +877,13 @@ void enterLightSleepUntilWake() {
   esp_task_wdt_add(networkTaskHandle);
   esp_task_wdt_add(lcdTaskHandle);
   esp_task_wdt_add(controlTaskHandle);
+  esp_task_wdt_add(emgStreamTaskHandle);
 
   connectWiFi();
 }
 ```
 
-ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 531–569](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/3c3f71f/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L531-L569)
+ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 543–584](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L543-L584)
 
 1. จอ LCD ขึ้นข้อความ `SLEEPING...` ให้ผู้ใช้รู้ว่าเครื่องกำลังจะพัก แล้วระบบตัดการเชื่อมต่อ Wi-Fi ซึ่งเป็นส่วนที่กินไฟมาก
 2. ระบบปิด watchdog ก่อน เพราะระหว่างที่ CPU หลับ ไม่มี task ใดรายงานตัวกับ watchdog ได้ ถ้าไม่ปิดไว้ watchdog จะเข้าใจว่า task ค้างและรีสตาร์ทบอร์ดทันทีที่ตื่น
@@ -843,28 +893,66 @@ void enterLightSleepUntilWake() {
 
 ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 3 เป็นรูปประกอบหัวข้อนี้
 
-## 6.4 เว็บและเซิร์ฟเวอร์: รับ telemetry, กระจาย SSE, เริ่ม/หยุดบันทึก, ส่งต่อ FastAPI และเก็บ MongoDB
+## 6.4 เว็บและเซิร์ฟเวอร์: รับ telemetry, กระจายผ่าน WebSocket และ SSE, เริ่ม/หยุดบันทึก, ส่งต่อ FastAPI และเก็บ MongoDB
 
-Frontend route `POST /api/telemetry` รับ JSON จาก ESP32 แล้วเรียก `serverTelemetry.ingestFullTelemetry()` ส่วน `GET /api/telemetry/stream` ส่ง initial state และ event แบบ `telemetry` หรือ `button` ผ่าน SSE ให้ browser
+### 6.4.1 ภาพรวมการทำงาน
 
-`telemetryStore` เก็บ raw buffer และสถานะล่าสุด คำนวณ EMG/FSR ที่ใช้แสดงผล และเรียก `forwardToBackend()` เพื่อส่งข้อมูลไป FastAPI ด้วย service token ฝั่ง backend มี `POST /v1/telemetry` สำหรับ machine-to-machine และ `GET /v1/telemetry` สำหรับ history ของผู้ใช้ที่ login แล้ว
+**การแบ่งหน้าที่ของเซิร์ฟเวอร์:** ฝั่งเซิร์ฟเวอร์แบ่งเป็น 2 ส่วน ได้แก่
 
-การเริ่ม/หยุดบันทึกใช้ `POST /api/recording` โดย frontend ตรวจสอบผู้ใช้ผ่าน FastAPI client และมี recording slot เดียวต่อ hardware rig ส่วน calibration proxy เรียก `GET/POST /v1/calibration` แล้ว mirror ค่ากลับเข้า in-memory store
+- เว็บเซิร์ฟเวอร์ SvelteKit: รับข้อมูลจาก ESP32 แปลงค่า แล้วส่งข้อมูลสดให้ browser
+- API เซิร์ฟเวอร์ FastAPI: ตรวจสอบผู้ใช้ และเก็บข้อมูลลงฐานข้อมูล MongoDB
 
-FastAPI สร้าง index ตอนเริ่มแอปและใช้ Motor เชื่อม MongoDB การสร้าง session result เขียนลง `session_results` ขณะที่ telemetry เขียนลง `telemetry_samples`
+**การรับข้อมูลจาก ESP32:** ESP32 ส่งข้อมูลมา 2 ช่องทาง ได้แก่
+
+- WebSocket `/ws/emg?role=device`: ค่า EMG ดิบ (ADC 0–4095) คั่นด้วยจุลภาค ทุก 20 ms เช่น `2612,2618`
+- `POST /api/telemetry`: JSON ของ FSR, MPU, ชีพจร, อุณหภูมิ และปุ่ม ทุก 100 ms
+
+เว็บเซิร์ฟเวอร์เก็บค่าล่าสุดของเซนเซอร์แต่ละกลุ่มไว้ในหน่วยความจำ และนับจำนวน packet ที่ได้รับต่อวินาทีเพื่อบอกว่าบอร์ดยังเชื่อมต่ออยู่
+
+**การแปลงค่าและนับจำนวนครั้ง:** เว็บเซิร์ฟเวอร์แปลงค่า ADC ของ EMG เป็นหน่วย µV แล้วเทียบเป็นเปอร์เซ็นต์ของ MVC ที่ได้จากการ calibrate ส่วนค่า FSR แปลงเป็นเปอร์เซ็นต์ของแรงบีบสูงสุด ค่า EMG ทุกตัวอย่างที่มาทาง WebSocket ยังถูกส่งเข้าตัวนับจำนวนครั้ง (rep) ด้วย เมื่อนับได้ 1 ครั้งจะส่ง event `emgRep` ไปยัง browser
+
+**การส่งข้อมูลสดไปยัง browser:** browser เปิดการเชื่อมต่อค้างไว้ 2 ช่องทาง ทั้งสองช่องทางส่ง ping ทุก 15 วินาทีเพื่อไม่ให้ reverse proxy ตัดการเชื่อมต่อช่วงที่ไม่มีข้อมูล
+
+- WebSocket `/ws/emg` (ไม่มี `role`): ส่งข้อมูล EMG เป็น JSON 3 แบบ
+  - `init`: ส่งครั้งแรกตอนเปิดการเชื่อมต่อ มีสถานะ EMG ทั้งหมดรวม buffer 150 ค่าล่าสุด
+  - `emg`: ส่งทุกครั้งที่บอร์ดส่ง frame มา มีเฉพาะ sample ใหม่ (µV หลังลบ baseline) พร้อม `level`, `rms`, `mvcPercent` และ `isHighTension`
+  - `emgRep`: ส่งเมื่อนับได้ 1 rep
+- `GET /api/telemetry/stream` แบบ Server-Sent Events (SSE): ครั้งแรกส่งสถานะของเซนเซอร์อื่น (ไม่รวม EMG) ให้ก่อน จากนั้นส่ง event `telemetry` และ `button` ทันทีที่มีข้อมูลใหม่
+
+browser ต่อ sample ใหม่เข้า buffer ของตัวเองแล้วตัดให้เหลือ 150 ค่า เซิร์ฟเวอร์จึงไม่ต้องส่ง buffer ทั้งก้อนทุกครั้ง ถ้า browser เครื่องใดรับข้อมูลไม่ทันจน buffer ของการเชื่อมต่อเกิน 1 MB เซิร์ฟเวอร์จะข้าม browser นั้นไปในรอบนั้น ไม่ให้เครื่องที่ช้าถ่วงเครื่องอื่น
+
+**การต่อ WebSocket เข้ากับ SvelteKit:** route ของ SvelteKit รองรับเฉพาะ HTTP จึงเขียน WebSocket server แยกไว้ที่ `frontend/emg-ws.js` โดยใช้ไลบรารี `ws` ตอนพัฒนา plugin ใน `vite.config.ts` ต่อ WebSocket เข้ากับ dev server ส่วนตอน production ใช้ `frontend/server.js` เป็น entry point แทน `node build` ซึ่งใช้ handler ของ SvelteKit ตัวเดิมแล้วต่อ WebSocket ลง http server เดียวกัน `emg-ws.js` อยู่นอกระบบ module ของ SvelteKit จึง import `telemetryStore.ts` ตรง ๆ ไม่ได้ ทั้งสองฝั่งคุยกันผ่าน `globalThis.__cyberpumpEmg` แทน การแปลงหน่วยและตัวนับ rep จึงยังใช้โค้ดเดิมใน `telemetryStore.ts`
+
+**การส่งคำสั่งกลับไปยังบอร์ด:** เว็บส่งคำสั่งไปหา ESP32 โดยตรงไม่ได้ จึงแนบคำสั่งไปกับคำตอบของ `POST /api/telemetry` ได้แก่ ช่วงค่า FSR ที่ calibrate แล้ว (`fsrZero`, `fsrMax`) และคำสั่งทดสอบ buzzer (`beep`)
+
+**การเริ่มและหยุดบันทึก:** ผู้ใช้ที่ login แล้วสั่งเริ่มหรือหยุดบันทึกผ่าน `POST /api/recording` เนื่องจากมีอุปกรณ์เพียงชุดเดียว ระบบจึงให้บันทึกได้ครั้งละ 1 คน หากผู้ใช้คนอื่นกำลังบันทึกอยู่จะได้ข้อผิดพลาด 409 และถ้าบันทึกนานเกิน 10 นาทีระบบจะหยุดบันทึกเองเผื่อกรณีผู้ใช้ปิดหน้าเว็บไปโดยไม่กดหยุด
+
+**การส่งข้อมูลต่อไปยัง FastAPI:** ระหว่างที่กำลังบันทึก ทุก packet ที่ได้รับทาง `POST /api/telemetry` (ทุก 100 ms) จะถูกส่งต่อไปยัง `POST /v1/telemetry` ของ FastAPI พร้อม `user_id` และ `session_id` โดยยืนยันตัวตนด้วย service token แทน token ของผู้ใช้ ข้อมูลที่ส่งต่อรวมสถานะ EMG ล่าสุดที่ได้จาก WebSocket ไว้ด้วย frame ของ WebSocket เองไม่ได้ถูกส่งต่อทีละ frame ส่วนการส่งข้อมูลสดผ่าน WebSocket และ SSE ยังทำงานตลอดไม่ว่าจะบันทึกอยู่หรือไม่
+
+**การ calibrate:** ค่า calibrate ถูกบันทึกผ่าน `/api/calibration` ซึ่งส่งต่อไปยัง `/v1/calibration` ของ FastAPI แล้วคัดลอกค่าเดียวกันกลับมาเก็บไว้ในหน่วยความจำของเว็บเซิร์ฟเวอร์เพื่อใช้แปลงค่าทันที เมื่อเริ่มการฝึกครั้งใหม่ ค่าในหน่วยความจำจะถูกรีเซ็ตเป็นค่าเริ่มต้นเพื่อให้ผู้ใช้ calibrate ใหม่
+
+**การเก็บข้อมูลใน MongoDB:** FastAPI เชื่อมต่อ MongoDB ด้วย Motor และสร้าง index ตอนเริ่มแอป ข้อมูลหลักแยกเก็บเป็น collection ดังนี้
+
+- `telemetry_samples`: ข้อมูลเซนเซอร์ระหว่างบันทึก ลบอัตโนมัติเมื่อครบ 90 วัน
+- `session_results`: ผลสรุปของแต่ละ session การฝึก
+- `calibrations`: ค่า calibrate ล่าสุดของผู้ใช้แต่ละคน (1 รายการต่อผู้ใช้)
 
 ## 6.5 เส้นทางข้อมูลแบบครบวงจรและตัวอย่างโค้ดสำคัญ
 
-เส้นทางข้อมูลหนึ่งรอบเริ่มจาก `ISR(TIMER1_COMPA_vect)` ของ Uno ตั้ง flag → ADC interrupt อ่าน A0/A1 → `Serial.print()` ส่งข้อความ → ESP32 `pollUnoLink()` parse บรรทัด → `SensorTask` อัปเดต `SharedState` → `NetworkTask` สร้าง JSON → `http.POST(payload)` → frontend `ingestFullTelemetry()` → SSE และ `forwardToBackend()` → FastAPI insert MongoDB
+เส้นทางข้อมูลหนึ่งรอบเริ่มจาก `ISR(TIMER1_COMPA_vect)` ของ Uno ตั้ง flag → ADC interrupt อ่าน A0/A1 → `Serial.print()` ส่งข้อความ → ESP32 `pollUnoLink()` parse บรรทัด → `SensorTask` แล้วแยกเป็น 2 ทาง
+
+- EMG: `SensorTask` ใส่ค่าลง `emgQueue` → `EmgStreamTask` ต่อเป็นข้อความ → `emgSocket.sendTXT()` → `frontend/emg-ws.js` → `ingestEmg()` แปลงหน่วยและนับ rep → WebSocket `/ws/emg` ไปยัง browser
+- เซนเซอร์อื่นและปุ่ม: `SensorTask` อัปเดต `SharedState` → `NetworkTask` สร้าง JSON → `http.POST(payload)` → frontend `ingestFullTelemetry()` → SSE และ `forwardToBackend()` (รวมสถานะ EMG ล่าสุด) → FastAPI insert MongoDB
 
 ตัวอย่างจุดสำคัญที่ควรนำไปแสดงในรายงานฉบับเต็ม:
 
 - การตั้ง Timer1 และ ADC ISR ใน `uno_emg_fsr_link.ino`
 - การ parse `emg,fsr` และการอ่าน I2C ใน `esp32_workout_firmware.ino`
-- การสร้าง telemetry payload ใน NetworkTask
+- การส่ง EMG ผ่าน WebSocket ใน EmgStreamTask และการสร้าง telemetry payload ใน NetworkTask
+- WebSocket server ใน `frontend/emg-ws.js` และ `ingestEmg()` ใน `frontend/src/lib/server/telemetryStore.ts`
 - การ broadcast event ใน `frontend/src/routes/api/telemetry/stream/+server.ts`
 - การ insert ใน `backend/app/routers/telemetry.py`
 
 ใช้ [`../flowchart.md`](../flowchart.md) Flowchart 1 เป็นรูปสรุปเส้นทางข้อมูล และ Flowchart 2-3 เป็นรายละเอียดฝั่งไมโครคอนโทรลเลอร์
 
-แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`
+แหล่งข้อมูล: โครงสร้างไฟล์ใน `backend/`, `frontend/` และ `test-sensor/arduino/`, `test-sensor/arduino/uno_emg_fsr_link/uno_emg_fsr_link.ino`, `test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino`, `test-sensor/arduino/esp32_workout_firmware/board_config.h`, `PINS.md`, `TROUBLESHOOTING.md`, `frontend/emg-ws.js`, `frontend/server.js`, `frontend/src/routes/api/telemetry/`, `frontend/src/routes/api/recording/+server.ts`, `frontend/src/routes/api/calibration/+server.ts`, `frontend/src/lib/server/telemetryStore.ts`, `backend/app/`, `README.md`

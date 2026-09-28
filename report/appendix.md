@@ -6,7 +6,7 @@
 
 - Flowchart 1: การไหลของข้อมูลจาก Uno ถึง MongoDB — ใช้ในข้อ 2.2 และ 6.5
 - Flowchart 2: Timer1, ADC interrupt และ UART ของ Uno — ใช้ในข้อ 6.2
-- Flowchart 3: Task, timer, interrupt, I2C และ HTTP ของ ESP32 — ใช้ในข้อ 6.3
+- Flowchart 3: Task, timer, interrupt, I2C, HTTP และ WebSocket ของ ESP32 — ใช้ในข้อ 6.3
 
 ไฟล์ [`db-diagram.md`](db-diagram.md) มี ER Diagram ของ MongoDB collections — ใช้ในข้อ 5.1 และ 5.2
 

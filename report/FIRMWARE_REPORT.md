@@ -11,7 +11,7 @@ test-sensor/arduino/esp32_workout_firmware/
 
 ## 1. วัตถุประสงค์
 
-เอกสารนี้อธิบายการทำงานของ software สองส่วนที่ใช้เป็น firmware ของระบบ ได้แก่ ตัวอ่าน sensor บน Arduino Uno และตัวควบคุมหลักบน ESP32 โดยเน้นกลไกที่สำคัญต่อการทำงานจริง ได้แก่ ADC, interrupt, timer/counter, watchdog, I2C, UART และ HTTP API
+เอกสารนี้อธิบายการทำงานของ software สองส่วนที่ใช้เป็น firmware ของระบบ ได้แก่ ตัวอ่าน sensor บน Arduino Uno และตัวควบคุมหลักบน ESP32 โดยเน้นกลไกที่สำคัญต่อการทำงานจริง ได้แก่ ADC, interrupt, timer/counter, watchdog, I2C, UART, HTTP API และ WebSocket
 
 ในรายงานจะใช้คำว่า **Software** เป็นคำเรียกรวมเพื่อให้อ่านง่าย แต่โค้ดที่รันอยู่บน microcontroller ในทางเทคนิคเรียกว่า **Firmware**
 
@@ -28,7 +28,8 @@ test-sensor/arduino/esp32_workout_firmware/
    - รับค่า EMG/FSR จาก Uno ผ่าน `Serial2`
    - อ่าน MPU6050/MPU6500, MAX30102 และ MLX90614 ผ่าน I2C
    - ควบคุมปุ่ม, LCD และ buzzer
-   - รวมข้อมูลเป็น JSON แล้วส่งไป backend ผ่าน HTTP POST
+   - ส่ง EMG ไป backend ผ่าน WebSocket `/ws/emg` ทุก 20 ms
+   - รวมข้อมูล sensor อื่นและปุ่มเป็น JSON แล้วส่งไป backend ผ่าน HTTP POST ทุก 100 ms
 
 ข้อมูลจึงไหลตามลำดับนี้:
 
@@ -37,9 +38,14 @@ Uno ADC (EMG/FSR)
        │ UART
        ▼
 ESP32 sensor fusion + control
-       │ HTTP POST /api/telemetry
+       │ WebSocket /ws/emg?role=device (EMG)
+       │ HTTP POST /api/telemetry (FSR, MPU, vitals, ปุ่ม)
        ▼
 Backend
+       │ WebSocket /ws/emg (EMG)
+       │ SSE /api/telemetry/stream (sensor อื่นและปุ่ม)
+       ▼
+Browser
 ```
 
 **จุดสำหรับแทรกภาพ:** ใช้ **Flowchart 1: ภาพรวมการส่งข้อมูลจาก Uno ไป Backend** จาก [flowchart.md](flowchart.md#flowchart-1-ภาพรวมการส่งข้อมูลจาก-uno-ไป-backend) แทรกต่อจากส่วนนี้
@@ -50,7 +56,7 @@ Backend
 |---|---|---|
 | `uno_emg_fsr_link/` | `uno_emg_fsr_link.ino` | อ่าน ADC และส่ง EMG/FSR ไป ESP32 |
 | `uno_emg_fsr_link/` | `board_config.h` | กำหนด pin และค่าพื้นฐานของบอร์ด |
-| `esp32_workout_firmware/` | `esp32_workout_firmware.ino` | อ่าน sensor, ควบคุมอุปกรณ์ และส่ง API |
+| `esp32_workout_firmware/` | `esp32_workout_firmware.ino` | อ่าน sensor, ควบคุมอุปกรณ์ และส่งข้อมูลผ่าน WebSocket/HTTP API |
 | `esp32_workout_firmware/` | `board_config.h` | กำหนด pin, ADC resolution และรูปแบบการพิมพ์ |
 
 รายงานนี้ไม่รวม sketch ทดสอบ sensor อื่นและไม่อธิบาย firmware นอกสองโฟลเดอร์ข้างต้น
@@ -164,17 +170,19 @@ emg,fsr\n
 3. เริ่ม I2C ที่ SDA GPIO21 และ SCL GPIO22
 4. เริ่ม LCD และตรวจสอบ MPU, MAX30102 และ MLX90614
 5. เชื่อมต่อ Wi-Fi
-6. เตรียม `HTTPClient`, mutex, queue และ timer
+6. เตรียม `HTTPClient` ด้วย `setupHttpClient()`, mutex, queue และ timer
 7. ตั้งค่า GPIO interrupt ของปุ่ม A/B
-8. สร้าง FreeRTOS tasks และเพิ่ม task เข้า watchdog
+8. สร้าง FreeRTOS tasks 5 ตัว และเพิ่ม task ทั้งหมดเข้า watchdog
 
 ### 6.2 UART ระหว่าง Uno กับ ESP32
 
 ESP32 เปิด UART ด้วย:
 
 ```cpp
-Serial2.begin(9600, SERIAL_8N1, UNO_LINK_RX_PIN, UNO_LINK_TX_PIN);
+Serial2.begin(UNO_LINK_BAUD, SERIAL_8N1, UNO_LINK_RX_PIN, UNO_LINK_TX_PIN);
 ```
+
+โดย `UNO_LINK_BAUD` มีค่า 9600
 
 ฟังก์ชัน `pollUnoLink()` จะอ่านข้อมูลจาก `Serial2` แบบไม่ block:
 
@@ -194,7 +202,7 @@ ESP32 ใช้ I2C bus เดียวกันกับ sensor และ LCD �
 
 | อุปกรณ์ | Address | การอ่านในโค้ด |
 |---|---:|---|
-| MPU6050/MPU6500 | `0x68` | อ่าน register โดยตรงและคำนวณ pitch/roll/velocity |
+| MPU6050/MPU6500 | `0x68` | อ่าน register โดยตรง (accel + gyro) และคำนวณ velocity |
 | MAX30102 | `0x57` | อ่าน FIFO ของ IR/Red แล้วคำนวณ HR/SpO2 โดยประมาณ |
 | MLX90614 | `0x5A` | อ่านอุณหภูมิผิวและคำนวณ delta จาก baseline |
 | LCD 16x2 | `0x27` | แสดงสถานะ set และเวลา |
@@ -219,8 +227,7 @@ ESP32 ยังมีค่า pin และ ADC configuration อยู่ใ�
 
 ESP32 ใช้ hardware timer เป็นจังหวะ sampling หลักที่ทุก 10 ms:
 
-- ESP32 Arduino Core 3.x ใช้ `timerBegin(1000000)` ให้ timer tick ที่ 1 MHz หรือความละเอียด 1 microsecond
-- Core รุ่นเก่าใช้ `timerBegin(0, 80, true)` เพื่อให้ได้ tick 1 MHz เช่นกัน
+- ใช้ `timerBegin(1000000)` ของ ESP32 Arduino Core 3.x ให้ timer tick ที่ 1 MHz หรือความละเอียด 1 microsecond (โค้ดหยุดด้วย `#error` ถ้าคอมไพล์ด้วย Core ที่เก่ากว่า 3.x)
 - ตั้ง alarm เป็น `SAMPLE_INTERVAL_MS * 1000`
 - timer ISR `onSampleTimer()` ทำเพียง `xSemaphoreGiveFromISR()`
 - `SensorTask` รอ `sampleTickSemaphore` แล้วจึงเริ่มรอบอ่านข้อมูล
@@ -237,16 +244,17 @@ ESP32 ใช้ hardware timer เป็นจังหวะ sampling หลั
 
 | Task | ความถี่/หน้าที่ |
 |---|---|
-| `SensorTask` | ทุก 10 ms อ่าน UART, I2C และอัปเดต snapshot |
-| `NetworkTask` | ทุก 250 ms รวม EMG และส่ง API |
-| `LcdTask` | ทุก 200 ms อัปเดต LCD |
-| `ControlTask` | รอ event ปุ่ม จัดการ set, buzzer และ idle sleep |
+| `SensorTask` | ทุก 10 ms อ่าน UART, I2C และอัปเดต snapshot (core 1, priority 3) |
+| `EmgStreamTask` | ทุก 20 ms drain `emgQueue` แล้วส่ง EMG ผ่าน WebSocket (core 0, priority 3, stack 6144) |
+| `NetworkTask` | ทุก 100 ms ส่ง sensor อื่นและปุ่มผ่าน HTTP POST (core 0, priority 2) |
+| `LcdTask` | ทุก 200 ms อัปเดต LCD (core 1, priority 1) |
+| `ControlTask` | รอ event ปุ่ม จัดการ set, buzzer และ idle sleep (core 1, priority 2) |
 
 กลไกที่ใช้ร่วมกันมีดังนี้:
 
 - `stateMutex` ป้องกันข้อมูลใน `SharedState`
 - `i2cMutex` ป้องกันการใช้ I2C พร้อมกัน
-- `emgQueue` ส่ง EMG จาก SensorTask ไป NetworkTask
+- `emgQueue` (64 ช่อง) ส่ง EMG จาก SensorTask ไป EmgStreamTask
 - `buttonEventQueue` ส่ง event จาก ISR ไป ControlTask
 - `sampleTickSemaphore` ส่งสัญญาณจาก timer ISR ไป SensorTask
 
@@ -254,55 +262,79 @@ ESP32 ใช้ hardware timer เป็นจังหวะ sampling หลั
 
 ## 7. Watchdog และ Light Sleep บน ESP32
 
-ESP32 ตั้ง task watchdog timeout 8 วินาที และ subscribe ทั้ง 4 tasks โดยแต่ละ task เรียก `esp_task_wdt_reset()` ในรอบการทำงานของตัวเอง หาก task ใดค้างนานเกินกำหนด ระบบจะ panic และ reboot ตาม configuration ของ watchdog
+ESP32 ตั้ง task watchdog timeout 8 วินาที และ subscribe ทั้ง 5 tasks โดยแต่ละ task เรียก `esp_task_wdt_reset()` ในรอบการทำงานของตัวเอง หาก task ใดค้างนานเกินกำหนด ระบบจะ panic และ reboot ตาม configuration ของ watchdog
 
 เมื่อไม่มีการเริ่ม set หรือกดปุ่มนาน 5 นาที `ControlTask` จะเรียก `enterLightSleepUntilWake()` โดย:
 
 1. แสดงสถานะ sleep บน LCD
 2. ตัด Wi-Fi
-3. ถอด tasks ออกจาก watchdog และ deinit watchdog
+3. ถอด tasks ทั้ง 5 ตัว (รวม `EmgStreamTask`) ออกจาก watchdog และ deinit watchdog
 4. ตั้ง wake source เป็น timer และ Button A
 5. เข้า `esp_light_sleep_start()`
-6. เมื่อตื่น ให้เริ่ม watchdog ใหม่และเชื่อมต่อ Wi-Fi อีกครั้ง
+6. เมื่อตื่น ให้เริ่ม watchdog ใหม่ subscribe tasks ทั้ง 5 ตัวกลับ และเชื่อมต่อ Wi-Fi อีกครั้ง
 
 ส่วนนี้เป็นกลไกประหยัดพลังงาน ไม่ใช่ส่วนของการส่งข้อมูล API โดยตรง
 
-## 8. HTTP API และรูปแบบข้อมูล
+## 8. HTTP API, WebSocket และรูปแบบข้อมูล
 
-ESP32 เตรียม HTTP client ดังนี้:
+ที่อยู่ของเซิร์ฟเวอร์กำหนดไว้จุดเดียวที่ `SERVER_HOST` และ `SERVER_PORT` แล้วนำไปสร้างทั้ง URL ของ HTTP POST และการเชื่อมต่อ WebSocket:
+
+```cpp
+const char* SERVER_HOST = "172.30.81.83";
+const uint16_t SERVER_PORT = 5173;
+const String serverUrl = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
+const char* EMG_WS_PATH = "/ws/emg?role=device";
+```
+
+### 8.1 EMG ผ่าน WebSocket
+
+EMG ถูกส่งแยกจาก HTTP POST โดย `EmgStreamTask` ผ่าน `WebSocketsClient emgSocket` (library WebSockets by Markus Sattler):
+
+- ตอนเริ่ม task เรียก `emgSocket.begin(SERVER_HOST, SERVER_PORT, EMG_WS_PATH)` และตั้ง reconnect ทุก 2000 ms (`EMG_WS_RECONNECT_MS`)
+- ทุก 20 ms (`EMG_STREAM_INTERVAL_MS`) เรียก `emgSocket.loop()` เมื่อ Wi-Fi เชื่อมต่ออยู่
+- drain sample ทั้งหมดจาก `emgQueue` มาต่อเป็น text frame ค่า ADC ดิบ 0-4095 คั่นด้วยจุลภาค ปกติมี 2 ค่าต่อ frame
+- ส่งด้วย `emgSocket.sendTXT()` เมื่อเชื่อมต่ออยู่ ถ้ายังไม่เชื่อมต่อ sample ที่ drain ออกมาจะถูกทิ้งและไม่ส่งย้อนหลัง
+
+ตัวอย่าง frame:
+
+```text
+2612,2618
+```
+
+ฝั่งเซิร์ฟเวอร์ EMG จากบอร์ดถูกรับโดย `frontend/emg-ws.js` แล้วส่งต่อให้เบราว์เซอร์ผ่าน WebSocket `/ws/emg` ส่วน SSE ส่งเฉพาะ sensor อื่นและปุ่ม
+
+### 8.2 Sensor อื่นและปุ่มผ่าน HTTP POST
+
+ESP32 เตรียม HTTP client ใน `setupHttpClient()` ดังนี้:
 
 - ใช้ `WiFiClient` และ `HTTPClient`
-- เรียก `http.begin(httpClient, serverUrl)` ตอน boot
+- เรียก `http.begin(httpClient, serverUrl)` ตอน boot และทุกครั้งที่ POST ล้มเหลว
 - ตั้ง header เป็น `Content-Type: application/json`
 - เปิด connection reuse ด้วย `http.setReuse(true)`
-- ส่งข้อมูลด้วย `http.POST(payload)` ทุก 250 ms เมื่อ Wi-Fi เชื่อมต่ออยู่
+- ตั้ง connect timeout 1500 ms และ read timeout 3000 ms
+- reset `tcpNoDelaySet` เพื่อให้เปิด TCP_NODELAY ใหม่หลัง POST สำเร็จครั้งแรกของ connection
 
-ข้อมูลหลักที่ส่งมีรูปแบบดังนี้:
+`NetworkTask` ส่งข้อมูลด้วย `http.POST(payload)` ทุก 100 ms เมื่อ Wi-Fi เชื่อมต่ออยู่ ถ้าล้มเหลวติดกัน 3 ครั้งจะพักส่ง 1 วินาที payload ไม่มี EMG แล้ว มีรูปแบบดังนี้:
 
 ```json
 {
   "board": "esp32",
-  "emg": { "raw": ["..."] },
   "fsr": { "force": 0, "stability": 100.0 },
   "mpu": {
-    "pitch": 0.0,
-    "roll": 0.0,
-    "velocity": 0.0,
-    "ax": 0.0,
-    "ay": 0.0,
-    "az": 0.0
+    "velocity": 0.000,
+    "peakVelocity": 0.000
   },
   "vitals": {
     "hr": 0,
     "spo2": 98.0,
-    "skinTemp": 0.0,
-    "deltaTemp": 0.0
+    "skinTemp": 0.00,
+    "deltaTemp": 0.00
   },
   "buttons": { "a": false, "b": false }
 }
 ```
 
-ถ้า POST สำเร็จจะ log HTTP status code และจำนวน EMG samples ที่ส่งไป หากเกิด error จะแสดงข้อความจาก `http.errorToString(code)`
+เมื่อ POST ได้ HTTP response (code > 0) จะเปิด TCP_NODELAY ด้วย `httpClient.setNoDelay(true)` หากยังไม่ได้เปิด ส่งคำตอบให้ `applyServerReply()` เพื่ออ่านค่า calibrate `fsrZero`/`fsrMax` และคำสั่งทดสอบ buzzer `beep` แล้ว log HTTP status code และเวลาที่ POST ใช้ หากเชื่อมต่อไม่ได้ (code <= 0) จะแสดงข้อความจาก `http.errorToString(code)` เตรียม HTTP client ใหม่ และคืน event ปุ่มที่ยังส่งไม่สำเร็จกลับไปรอส่งรอบถัดไป
 
 ค่า SpO2 ในโค้ดเป็นค่าประมาณจาก Red/IR ratio ไม่ใช่ค่าทางการแพทย์
 
@@ -313,9 +345,10 @@ ESP32 เตรียม HTTP client ดังนี้:
 3. Timer ของ Uno ปลุก ADC ให้ได้ EMG และ FSR ทุก 10 ms
 4. Uno scale ค่าแล้วส่ง `emg,fsr` ผ่าน UART
 5. Timer ของ ESP32 ปลุก `SensorTask` ทุก 10 ms เพื่ออ่าน UART และ sensor I2C
-6. `SensorTask` อัปเดต `SharedState` และใส่ EMG ลง queue
-7. `NetworkTask` รวมข้อมูลทุก 250 ms แล้วส่ง HTTP POST ไป backend
-8. `LcdTask` แสดงสถานะ และ `ControlTask` รับปุ่ม/ควบคุม buzzer
+6. `SensorTask` อัปเดต `SharedState` และใส่ EMG ลง `emgQueue`
+7. `EmgStreamTask` drain `emgQueue` ทุก 20 ms แล้วส่ง EMG ผ่าน WebSocket ไป backend
+8. `NetworkTask` รวมข้อมูล sensor อื่นและปุ่มทุก 100 ms แล้วส่ง HTTP POST ไป backend
+9. `LcdTask` แสดงสถานะ และ `ControlTask` รับปุ่ม/ควบคุม buzzer
 
 ## 10. ข้อควรระวังจาก source code
 
@@ -324,13 +357,14 @@ ESP32 เตรียม HTTP client ดังนี้:
 - หาก Uno ไม่ส่งข้อมูลเกิน 500 ms ESP32 จะรายงาน UART link lost และคงค่าล่าสุดไว้
 - หาก I2C ถูกใช้งานพร้อมกันโดยไม่มี mutex อาจทำให้ข้อมูลจาก sensor หรือตัว LCD ผิดพลาดได้
 - ค่า SpO2 และ velocity เป็นค่าประมาณ ไม่ควรใช้เป็นค่าทางการแพทย์หรือค่าทดสอบมาตรฐาน
-- Wi-Fi credential และ URL ของ API ถูกกำหนดไว้ใน source code ควรย้ายออกไปก่อนใช้งานจริงหรือเผยแพร่ repository
-- ต้องทดสอบ watchdog, light sleep, Wi-Fi reconnect และ UART บน hardware จริงก่อนใช้งานต่อเนื่อง
+- ระหว่างที่ WebSocket หลุด sample EMG ที่ drain ออกจาก `emgQueue` จะถูกทิ้ง ไม่ส่งย้อนหลัง
+- Wi-Fi credential และที่อยู่เซิร์ฟเวอร์ (`SERVER_HOST`/`SERVER_PORT`) ถูกกำหนดไว้ใน source code ควรย้ายออกไปก่อนใช้งานจริงหรือเผยแพร่ repository
+- ต้องทดสอบ watchdog, light sleep, Wi-Fi reconnect, WebSocket reconnect และ UART บน hardware จริงก่อนใช้งานต่อเนื่อง
 
 ## 11. สรุป
 
-`uno_emg_fsr_link.ino` ทำหน้าที่อ่าน ADC แบบ interrupt-driven ที่ 100 Hz และส่งข้อมูลผ่าน UART ส่วน `esp32_workout_firmware.ino` ทำหน้าที่รวมข้อมูลจาก Uno และ sensor I2C แล้วแบ่งงานเป็น FreeRTOS tasks สำหรับ sampling, network, LCD และ control
+`uno_emg_fsr_link.ino` ทำหน้าที่อ่าน ADC แบบ interrupt-driven ที่ 100 Hz และส่งข้อมูลผ่าน UART ส่วน `esp32_workout_firmware.ino` ทำหน้าที่รวมข้อมูลจาก Uno และ sensor I2C แล้วแบ่งงานเป็น FreeRTOS tasks 5 ตัว สำหรับ sampling, EMG streaming ผ่าน WebSocket, network (HTTP POST), LCD และ control
 
-การออกแบบนี้ทำให้การอ่าน sensor ไม่ต้องรอ HTTP POST และมี watchdog/queue/mutex ช่วยควบคุมความเสถียรของระบบ
+การออกแบบนี้ทำให้การอ่าน sensor ไม่ต้องรอ HTTP POST, EMG ไม่ต้องรอ POST ของ sensor อื่น และมี watchdog/queue/mutex ช่วยควบคุมความเสถียรของระบบ
 
 เอกสารนี้อ้างอิงเฉพาะสองโฟลเดอร์ที่ระบุไว้ด้านบน ไม่มีการแก้ source code firmware และไม่มีการ push ขึ้น remote repository

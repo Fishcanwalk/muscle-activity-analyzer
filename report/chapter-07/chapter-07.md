@@ -6,7 +6,7 @@
 
 สภาพแวดล้อมที่ระบุในเอกสารโครงการประกอบด้วย Arduino Uno, ESP32 DevKit, เซนเซอร์ที่ต่อผ่าน ADC/UART/I2C, MongoDB ผ่าน Docker, FastAPI backend และ SvelteKit frontend การทดสอบการสื่อสารใช้ Serial monitor, I2C scanner และ diagnostic raw echo ตามบันทึก troubleshooting
 
-วิธีทดสอบควรเริ่มจากแยกส่วน: ตรวจ Uno ส่งข้อความได้ก่อน จากนั้นตรวจ ESP32 รับ UART และอ่าน I2C ต่อด้วยตรวจ POST เข้า frontend, SSE ไป browser และการบันทึกเข้า backend เพื่อให้แยกสาเหตุได้เมื่อเกิดข้อผิดพลาด
+วิธีทดสอบควรเริ่มจากแยกส่วน: ตรวจ Uno ส่งข้อความได้ก่อน จากนั้นตรวจ ESP32 รับ UART และอ่าน I2C ต่อด้วยตรวจ WebSocket ของ EMG และ POST ของเซนเซอร์อื่นเข้า frontend, WebSocket และ SSE ไป browser และการบันทึกเข้า backend เพื่อให้แยกสาเหตุได้เมื่อเกิดข้อผิดพลาด
 
 ## 7.2 กรณีทดสอบและเกณฑ์ประเมินผล
 
@@ -16,8 +16,9 @@
 | UART Uno-ESP32 | ต่อผ่าน voltage divider และดู log ESP32 | ESP32 parse ค่าได้ ไม่ค้างที่ศูนย์ |
 | Timer/ADC | ตรวจความต่อเนื่องของข้อมูลและรอบอ่าน | ไม่มีการหยุดยาวจน watchdog reset |
 | I2C | ใช้ scanner และตรวจ log ตอนเริ่มระบบ | พบ address ของอุปกรณ์ที่ต่ออยู่ |
-| HTTP telemetry | ตรวจ response ของ `/api/telemetry` | ได้ JSON response และ packet count เพิ่ม |
-| SSE | เปิดหน้า dashboard และถอด/ต่อ network | สถานะเปลี่ยนและ reconnect ได้ |
+| HTTP telemetry | ตรวจ response ของ `/api/telemetry` | ได้ JSON response ที่มี `fsrZero`/`fsrMax`/`beep` และ packet count เพิ่ม |
+| EMG WebSocket | จำลองบอร์ดส่ง frame เข้า `/ws/emg?role=device` และดู Serial Monitor ของ ESP32 | browser ได้ `init` และ `emg` ครบทุก frame นับ rep ได้ และ ESP32 ขึ้น `[EMG-WS] connected` |
+| SSE | เปิดหน้า dashboard และถอด/ต่อ network | สถานะเปลี่ยนและ reconnect ได้ โดย SSE ไม่มี EMG แล้ว |
 | Authentication | เรียก endpoint แบบมี/ไม่มี token | endpoint ส่วนตัวปฏิเสธ request ที่ไม่มี token |
 | Calibration | GET/POST calibration ของผู้ใช้ | ค่าถูกบันทึกและสะท้อนใน live conversion |
 | Session result | จบเซตและบันทึกผล | ผลถูกสร้างและค้นย้อนหลังได้ |
@@ -34,7 +35,7 @@
 - การตรวจ I2C ใช้แยกปัญหา bus รวมกับปัญหาเฉพาะอุปกรณ์ได้ โดยกรณีที่พบอุปกรณ์อื่นแต่ไม่พบ MLX90614 ชี้ไปที่สายของ MLX90614
 - การตั้ง baud ของ Serial monitor ต้องตรงกับอุปกรณ์ มิฉะนั้นจะเห็นข้อความเพี้ยน
 
-สำหรับฝั่งเว็บและ backend โค้ดมีเส้นทางรับ telemetry, SSE, authentication, calibration, session result และ MongoDB index ครบตามที่ออกแบบไว้ แต่รายงานนี้ไม่เพิ่มตัวเลขผลการทดสอบที่ไม่ได้บันทึกไว้ในแหล่งข้อมูล
+สำหรับฝั่งเว็บและ backend โค้ดมีเส้นทางรับ telemetry, WebSocket, SSE, authentication, calibration, session result และ MongoDB index ครบตามที่ออกแบบไว้ แต่รายงานนี้ไม่เพิ่มตัวเลขผลการทดสอบที่ไม่ได้บันทึกไว้ในแหล่งข้อมูล
 
 ## 7.4 การวิเคราะห์ผลและข้อจำกัดที่พบ
 
