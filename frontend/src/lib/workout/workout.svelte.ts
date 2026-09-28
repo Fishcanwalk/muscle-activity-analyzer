@@ -201,7 +201,7 @@ class WorkoutManager {
 			cheatedReps: this.cheatedReps,
 			formPurityPercent: this.formPurityPercent,
 			effectiveReps: this.effectiveReps,
-			highTensionTutSeconds: this.highTensionTutSeconds,
+			highTensionTutSeconds: Math.round(this.highTensionTutSeconds * 10) / 10,
 			reps: [...this.repsInSet],
 			timestamp: new Date().toLocaleTimeString(),
 			sessionId: this.sessionId,
@@ -350,8 +350,10 @@ class WorkoutManager {
 		this.fsmState = 'COMPLETION';
 	}
 
-	incrementTut(seconds = 0.02) {
-		this.highTensionTutSeconds = Number((this.highTensionTutSeconds + seconds).toFixed(1));
+	// Accumulated unrounded (steps are ~0.02 s, which rounding to 0.1 would swallow);
+	// rounded only when the set's summary is built.
+	incrementTut(seconds: number) {
+		this.highTensionTutSeconds += seconds;
 	}
 
 	// Called automatically by stopSet(), and again by PagePostSet.svelte's buttons,

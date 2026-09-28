@@ -83,6 +83,10 @@ export type StartRecordingResult = { ok: true } | { ok: false; reason: 'conflict
 // refresh, and would wrongly kill recording on every reload).
 const MAX_RECORDING_DURATION_MS = 10 * 60 * 1000;
 
+// No telemetry POST for this long and the board counts as disconnected (it posts every
+// 100 ms, and a slow network stretches that to ~300 ms).
+const DEVICE_TIMEOUT_MS = 3000;
+
 // `baseline` is the calibrated resting level on the same scale
 // (state.calibration.emgBaseline); 0 when uncalibrated.
 function adcToEmgUv(rawAdc: number, baseline = 0): number {
@@ -181,9 +185,9 @@ class ServerTelemetryState {
 	 * new samples (they keep their own rolling buffer) plus the current envelope values.
 	 * Backend persistence rides on the next telemetry POST, which forwards state.emg.
 	 */
-	ingestEmg(raws: number[]) {
+	ingestEmg(raws: number[], velocity?: number) {
 		const now = Date.now();
-		const samples = this.ingestEmgSamples(raws, now);
+		const { samples, highTensionMs } = this.ingestEmgSamples(raws, now, velocity);
 		this.state.sensors.emg.lastSeen = now;
 		const { level, rms, mvcPercent, isHighTension } = this.state.emg;
 		this.broadcast('emgStream', {
@@ -192,6 +196,7 @@ class ServerTelemetryState {
 			rms,
 			mvcPercent,
 			isHighTension,
+			highTensionMs,
 			emgRep: this.state.emgRep,
 			lastSeen: now
 		});
@@ -208,16 +213,33 @@ class ServerTelemetryState {
 
 	/** The SSE payload: everything but EMG, which browsers get from /ws/emg. */
 	sseSnapshot() {
-		const { emg: _emg, emgRep: _emgRep, ...rest } = this.state;
+		const { emg: _emg, emgRep: _emgRep, ...rest } = this.publicState();
 		return rest;
+	}
+
+	/** `state` with the device status aged: `connected` is only set when a packet arrives. */
+	publicState() {
+		const live = Date.now() - this.state.device.lastSeen < DEVICE_TIMEOUT_MS;
+		return {
+			...this.state,
+			device: { ...this.state.device, connected: live, rateHz: live ? this.state.device.rateHz : 0 }
+		};
 	}
 
 	// Converts each raw sample, smooths it into the envelope, runs the rep detector on
 	// every sample (not just the latest one) and broadcasts an `emgRep` event per counted
-	// rep. Returns the baseline-adjusted samples appended to the rolling buffer.
-	private ingestEmgSamples(raws: number[], timestamp: number): number[] {
+	// rep. Returns the baseline-adjusted samples appended to the rolling buffer, and how
+	// long the envelope sat at or above the "real effort" threshold (High-Tension TUT).
+	// `velocity` is the board's peak lifting velocity over this frame, sent with the EMG
+	// so each rep's speed is taken on the same timeline as the contraction itself.
+	private ingestEmgSamples(
+		raws: number[],
+		timestamp: number,
+		velocity?: number
+	): { samples: number[]; highTensionMs: number } {
 		const { emgBaseline, emgMvc } = this.state.calibration;
 		const fresh: number[] = [];
+		let highTensionMs = 0;
 
 		let lastUv = this.state.emg.raw;
 		let envelopeUv = this.state.emg.rms;
@@ -237,7 +259,8 @@ class ServerTelemetryState {
 
 			const pct = (envelopeUv / (emgMvc || 1)) * 100;
 			if (pct > windowPeakPct) windowPeakPct = pct;
-			const rep = this.emgRepDetector.push(pct, envelopeUv, EMG_SAMPLE_MS);
+			if (pct >= this.state.calibration.emgRepPeakPct) highTensionMs += EMG_SAMPLE_MS;
+			const rep = this.emgRepDetector.push(pct, envelopeUv, EMG_SAMPLE_MS, velocity);
 			if (rep) this.broadcast('emgRep', rep satisfies EmgRepEvent);
 		}
 
@@ -259,7 +282,7 @@ class ServerTelemetryState {
 			state: this.emgRepDetector.state,
 			count: this.emgRepDetector.count
 		};
-		return fresh;
+		return { samples: fresh, highTensionMs };
 	}
 
 	ingestFullTelemetry(data: FullTelemetryPacket) {
@@ -489,7 +512,7 @@ export const serverTelemetry = new ServerTelemetryState();
 // emg-ws.js runs on the raw Node http server, outside SvelteKit's module graph, so it
 // reaches this store through a global instead of an import (see its header comment).
 export interface EmgStreamBridge {
-	ingestEmg(raws: number[]): void;
+	ingestEmg(raws: number[], velocity?: number): void;
 	snapshot(): ReturnType<ServerTelemetryState['emgSnapshot']>;
 	subscribe(event: 'emgStream' | 'emgRep', listener: (data: unknown) => void): () => void;
 }
@@ -499,7 +522,7 @@ declare global {
 }
 
 globalThis.__cyberpumpEmg = {
-	ingestEmg: (raws) => serverTelemetry.ingestEmg(raws),
+	ingestEmg: (raws, velocity) => serverTelemetry.ingestEmg(raws, velocity),
 	snapshot: () => serverTelemetry.emgSnapshot(),
 	subscribe: (event, listener) => serverTelemetry.subscribe(event, listener)
 };

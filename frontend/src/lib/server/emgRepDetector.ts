@@ -42,6 +42,11 @@ export interface EmgRepEvent {
 	durationMs: number;
 	/** Peak reached peakPct -- the muscle actually did the work. */
 	isStrong: boolean;
+	/**
+	 * Highest lifting velocity (m/s) the board reported during the contraction, or null
+	 * if no velocity arrived with the samples (firmware that sends EMG only).
+	 */
+	peakVelocity: number | null;
 }
 
 export class EmgRepDetector {
@@ -54,6 +59,7 @@ export class EmgRepDetector {
 	private contractMs = 0;
 	private peakPct = 0;
 	private peakUv = 0;
+	private peakVelocity: number | null = null;
 	private sinceLastRepMs = Number.POSITIVE_INFINITY;
 
 	constructor(config: Partial<EmgRepConfig> = {}) {
@@ -76,11 +82,15 @@ export class EmgRepDetector {
 		this.contractMs = 0;
 		this.peakPct = 0;
 		this.peakUv = 0;
+		this.peakVelocity = null;
 		this.sinceLastRepMs = Number.POSITIVE_INFINITY;
 	}
 
-	/** Feeds one envelope sample covering `dtMs`; returns an event when a rep completes. */
-	push(pct: number, uv: number, dtMs: number): EmgRepEvent | null {
+	/**
+	 * Feeds one envelope sample covering `dtMs`; returns an event when a rep completes.
+	 * `velocity` is the board's lifting velocity at that moment, if it sent one.
+	 */
+	push(pct: number, uv: number, dtMs: number, velocity?: number): EmgRepEvent | null {
 		const c = this.config;
 		this.sinceLastRepMs += dtMs;
 
@@ -89,9 +99,10 @@ export class EmgRepDetector {
 				if (this.aboveMs === 0) {
 					this.peakPct = 0;
 					this.peakUv = 0;
+					this.peakVelocity = null;
 				}
 				this.aboveMs += dtMs;
-				this.trackPeak(pct, uv);
+				this.trackPeak(pct, uv, velocity);
 				if (this.aboveMs >= c.debounceMs) {
 					this.state = 'CONTRACT';
 					this.contractMs = this.aboveMs;
@@ -104,7 +115,7 @@ export class EmgRepDetector {
 		}
 
 		this.contractMs += dtMs;
-		this.trackPeak(pct, uv);
+		this.trackPeak(pct, uv, velocity);
 		if (pct >= c.offPct) {
 			this.belowMs = 0;
 			return null;
@@ -127,12 +138,16 @@ export class EmgRepDetector {
 			peakPct: Math.round(this.peakPct),
 			peakUv: Math.round(this.peakUv),
 			durationMs: Math.round(durationMs),
-			isStrong: this.peakPct >= c.peakPct
+			isStrong: this.peakPct >= c.peakPct,
+			peakVelocity: this.peakVelocity === null ? null : Math.round(this.peakVelocity * 1000) / 1000
 		};
 	}
 
-	private trackPeak(pct: number, uv: number) {
+	private trackPeak(pct: number, uv: number, velocity?: number) {
 		if (pct > this.peakPct) this.peakPct = pct;
 		if (uv > this.peakUv) this.peakUv = uv;
+		if (velocity !== undefined && (this.peakVelocity === null || velocity > this.peakVelocity)) {
+			this.peakVelocity = velocity;
+		}
 	}
 }

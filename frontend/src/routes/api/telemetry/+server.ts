@@ -5,7 +5,7 @@ export const GET: RequestHandler = async () => {
 	return json({
 		status: 'ok',
 		timestamp: Date.now(),
-		telemetry: serverTelemetry.state
+		telemetry: serverTelemetry.publicState()
 	});
 };
 

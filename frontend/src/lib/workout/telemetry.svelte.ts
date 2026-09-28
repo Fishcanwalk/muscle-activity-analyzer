@@ -94,7 +94,14 @@ class TelemetryManager {
 
 	isWebcamActive = $state(false);
 	connectionState = $state<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting');
-	isWsConnected = $derived(this.connectionState === 'connected');
+	// When this browser last received a board packet (its own clock, so a server clock
+	// that runs ahead or behind can't make the board look connected or gone).
+	private lastPacketAt = $state(0);
+	private readonly BOARD_TIMEOUT_MS = 3000;
+	/** Board packets are arriving: the stream is up and one came in the last 3 s. */
+	isWsConnected = $derived(
+		this.connectionState === 'connected' && this.now - this.lastPacketAt < this.BOARD_TIMEOUT_MS
+	);
 	streamHz = $state(0);
 
 	private eventSource: EventSource | null = null;
@@ -142,6 +149,7 @@ class TelemetryManager {
 					const data = JSON.parse(e.data);
 					if (data.device?.connected) {
 						this.connectionState = 'connected';
+						this.lastPacketAt = Date.now();
 						this.reconnectDelayMs = 1000;
 						this.streamHz = data.device.rateHz || 50;
 						this.device.board = data.device.board ?? '';
@@ -268,6 +276,8 @@ class TelemetryManager {
 				);
 			}
 			this.applyEmgValues(msg, msg.emgRep, msg.lastSeen);
+			// Time the envelope spent above "real effort", measured per sample on the server.
+			if (workout.isSetRunning && msg.highTensionMs > 0) workout.incrementTut(msg.highTensionMs / 1000);
 		}
 	}
 
@@ -302,7 +312,13 @@ class TelemetryManager {
 	// A rep from the server-side EMG detector, the only thing that counts or judges reps:
 	// a rep whose peak never reached the "real effort" threshold counts as a cheat. The
 	// camera is a plain preview for the lifter and feeds nothing in here.
-	private onEmgRep(rep: { peakPct: number; peakUv: number; durationMs: number; isStrong: boolean }) {
+	private onEmgRep(rep: {
+		peakPct: number;
+		peakUv: number;
+		durationMs: number;
+		isStrong: boolean;
+		peakVelocity?: number | null;
+	}) {
 		this.emgRepTestCount += 1;
 		if (!workout.isSetRunning) return;
 
@@ -311,10 +327,13 @@ class TelemetryManager {
 		const cheatReason = rep.isStrong ? null : 'Low Activation (EMG)';
 
 		// Velocity-based training: this rep's peak lifting speed against the set's first rep.
-		const peakVelocity = Math.max(
-			0,
-			...this.velocitySamples.filter((e) => e.at >= from).map((e) => e.v)
-		);
+		// The server takes it from the velocity the board sends with the EMG frames, on the
+		// contraction's own timeline; firmware that doesn't send it falls back to matching
+		// the SSE velocity samples that arrived during the rep window.
+		const peakVelocity =
+			typeof rep.peakVelocity === 'number'
+				? Math.max(0, rep.peakVelocity)
+				: Math.max(0, ...this.velocitySamples.filter((e) => e.at >= from).map((e) => e.v));
 		if (this.mpu.rep1Velocity === 0 && peakVelocity > 0.05) this.mpu.rep1Velocity = round3(peakVelocity);
 		this.mpu.lastRepVelocity = round3(peakVelocity);
 		this.mpu.velocityLossPercent =

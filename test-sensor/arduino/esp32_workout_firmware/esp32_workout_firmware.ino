@@ -164,6 +164,7 @@ struct SharedState {
   float fsrStability = 100.0f;
   float velocity = 0;
   float peakVelocity = 0;
+  float streamPeakVelocity = 0;
   int beatAvg = 0;
   float spo2Estimate = 98.0f;
   float skinTemp = 0, deltaTemp = 0;
@@ -662,6 +663,7 @@ void sensorTask(void *pvParameters) {
       shared.fsrStability = stability;
       shared.velocity = velocity;
       if (velocity > shared.peakVelocity) shared.peakVelocity = velocity;
+      if (velocity > shared.streamPeakVelocity) shared.streamPeakVelocity = velocity;
       shared.beatAvg = beatAvg;
       shared.spo2Estimate = spo2Estimate;
       shared.skinTemp = skinTemp;
@@ -781,15 +783,24 @@ void emgStreamTask(void *pvParameters) {
 
     if (WiFi.status() == WL_CONNECTED) emgSocket.loop();
 
-    char frame[EMG_QUEUE_LEN * 6];
+    char frame[EMG_QUEUE_LEN * 6 + 16];
     int pos = 0;
     int count = 0;
     int sample;
-    while (pos < (int)sizeof(frame) - 8 && xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
+    while (pos < (int)sizeof(frame) - 24 && xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
       pos += snprintf(frame + pos, sizeof(frame) - pos, "%s%d", count == 0 ? "" : ",", sample);
       count++;
     }
-    if (count > 0 && emgSocket.isConnected()) emgSocket.sendTXT(frame, pos);
+    if (count == 0) continue;
+
+    float framePeakVelocity = 0.0f;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      framePeakVelocity = shared.streamPeakVelocity;
+      shared.streamPeakVelocity = shared.velocity;
+      xSemaphoreGive(stateMutex);
+    }
+    pos += snprintf(frame + pos, sizeof(frame) - pos, "|%.3f", framePeakVelocity);
+    if (emgSocket.isConnected()) emgSocket.sendTXT(frame, pos);
   }
 }
 

@@ -4,7 +4,9 @@
 // in production.
 //
 //   ws://<host>/ws/emg?role=device  the ESP32 sends text frames of raw ADC samples,
-//                                   comma-separated ("2048,2051")
+//                                   comma-separated, then "|" and its peak lifting
+//                                   velocity (m/s) over the frame: "2048,2051|0.420".
+//                                   The velocity part is optional (older firmware).
 //   ws://<host>/ws/emg              browsers receive JSON: one "init" snapshot, then an
 //                                   "emg" message per device frame and an "emgRep" per rep
 //
@@ -77,8 +79,11 @@ export function attachEmgWebSocket(httpServer, ensureTelemetryLoaded = async () 
 /** @param {WebSocket} ws */
 function handleDevice(ws) {
 	ws.on('message', (data) => {
-		const raws = String(data).split(',').map(Number).filter(Number.isFinite);
-		if (raws.length > 0) bridge()?.ingestEmg(raws);
+		const [emgPart, velocityPart] = String(data).split('|');
+		const raws = emgPart.split(',').map(Number).filter(Number.isFinite);
+		const velocity = velocityPart === undefined ? NaN : Number(velocityPart);
+		if (raws.length > 0)
+			bridge()?.ingestEmg(raws, Number.isFinite(velocity) ? velocity : undefined);
 	});
 }
 
