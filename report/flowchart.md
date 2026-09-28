@@ -20,10 +20,10 @@ flowchart TD
     Scale[กลับด้านค่า FSR<br/>และแปลง 10-bit เป็น 12-bit]
     UART[/ส่งข้อมูล emg,fsr<br/>ผ่าน UART 9600 baud/]
     ESP[ESP32]
-    ReadI2C[/อ่าน MPU6050 หรือ MPU6500<br/>MAX30102 และ MLX90614 ผ่าน I2C/]
+    ReadI2C[/อ่าน MPU6050<br/>MAX30102 และ MLX90614 ผ่าน I2C/]
     Inputs[รับสถานะปุ่ม A/B<br/>และควบคุม LCD กับ buzzer]
     EmgWS[/"EMG ผ่าน WebSocket<br/>/ws/emg ทุก 20 ms"/]
-    Telemetry[รวมข้อมูลเซนเซอร์อื่น<br/>และปุ่มเป็น JSON]
+    Telemetry[รวมข้อมูลเซนเซอร์<br/>และปุ่มเป็น JSON]
     HTTP[/"HTTP POST ทุก 100 ms<br/>ไปยัง /api/telemetry"/]
     Web[Frontend SvelteKit<br/>รับ EMG และ telemetry<br/>แล้วส่งต่อไปหน้า Dashboard]
     Backend[Backend FastAPI<br/>ตรวจสอบและบันทึกข้อมูล]
@@ -110,60 +110,45 @@ flowchart TD
 %%{init: {"theme":"base", "themeVariables": {"background":"#ffffff", "primaryColor":"#ffffff", "primaryTextColor":"#000000", "primaryBorderColor":"#222222", "lineColor":"#222222", "secondaryColor":"#ffffff", "tertiaryColor":"#ffffff", "fontFamily":"Arial"}}}%%
 flowchart TD
     Start([เริ่มต้น ESP32])
-    Init[ตั้งค่า Serial2, I2C, LCD<br/>Wi-Fi ปุ่ม และ watchdog]
-    Tasks[สร้าง 5 FreeRTOS tasks<br/>SensorTask, EmgStreamTask,<br/>NetworkTask, LcdTask และ ControlTask]
-    Timer[Hardware timer<br/>ปลุก SensorTask ทุก 10 ms]
-    Sensor[SensorTask<br/>อ่านข้อมูลตามรอบเวลา]
-    UART[อ่าน emg,fsr<br/>จาก Uno ผ่าน UART]
-    I2C[อ่าน MPU, MAX30102<br/>และ MLX90614 ผ่าน I2C]
-    State[อัปเดต SharedState<br/>และส่ง EMG เข้า emgQueue]
-    EmgTask[EmgStreamTask<br/>ทำงานทุก 20 ms]
-    EmgFrame[ดึง EMG ทั้งหมดจาก emgQueue<br/>ต่อเป็นข้อความ เช่น 2612,2618]
-    WS[/"WebSocketsClient.sendTXT<br/>ไปยัง /ws/emg"/]
-    Network[NetworkTask<br/>ทำงานทุก 100 ms]
-    JSON[สร้าง JSON telemetry<br/>ของเซนเซอร์อื่นและปุ่ม]
-    POST[/HTTPClient.POST<br/>ไปยัง telemetry API/]
-    ButtonISR[GPIO button ISR<br/>ตรวจ A/B และ debounce]
-    ButtonQueue[buttonEventQueue]
+    Init[ตั้งค่า Serial2, I2C, LCD,<br/>Wi-Fi ปุ่ม และ watchdog]
+    Tasks[สร้าง 5 FreeRTOS tasks]
+
+    Sensor["SensorTask · ทุก 10 ms<br/>อ่าน UART จาก Uno และ I2C<br/>(MPU6050, MAX30102, MLX90614)"]
+    EmgTask["EmgStreamTask · ทุก 20 ms<br/>รวมค่า EMG แล้วส่งออก"]
+    WS[/"WebSocket /ws/emg"/]
+    Network["NetworkTask · ทุก 100 ms<br/>สร้าง JSON แล้วส่งออก"]
+    POST[/"HTTP POST /api/telemetry"/]
     Control[ControlTask<br/>อัปเดตสถานะการฝึกและ buzzer]
-    LCD[LcdTask<br/>อ่าน SharedState และแสดงผล LCD]
-    Watchdog[รีเซ็ต watchdog<br/>ของ task ที่ทำงานปกติ]
+    LCD[LcdTask · ทุก 200 ms<br/>แสดงผลบนจอ LCD]
+    ButtonISR[GPIO Button ISR<br/>ตรวจปุ่ม A/B และ debounce]
+
+    Watchdog[ทุก task reset watchdog<br/>เมื่อทำงานครบรอบ]
     Idle{ไม่มีการใช้งาน<br/>ต่อเนื่อง 5 นาทีหรือไม่?}
-    Sleep[เข้าสู่ light sleep]
+    Sleep[เข้าสู่ light sleep<br/>ปิด watchdog ชั่วคราว]
     Wake[ปลุกด้วย Button A<br/>หรือ timer keepalive]
 
-    Start --> Init
-    Init --> Tasks
-    Tasks --> Timer
-    Timer --> Sensor
-    Sensor --> UART
-    Sensor --> I2C
-    UART --> State
-    I2C --> State
-    State --> EmgTask
-    EmgTask --> EmgFrame
-    EmgFrame --> WS
-    WS --> Timer
-    State --> Network
-    Network --> JSON
-    JSON --> POST
-    POST --> Timer
+    Start --> Init --> Tasks
+    Tasks --> Sensor & EmgTask & Network & Control & LCD
 
-    ButtonISR --> ButtonQueue
-    ButtonQueue --> Control
-    Control --> State
-    State --> LCD
-    Control --> LCD
+    EmgTask --> WS
+    Network --> POST
+    ButtonISR --> Control
+
+    Sensor -.->|emgQueue| EmgTask
+    Sensor -.->|SharedState| Network
+    Sensor -.->|SharedState| LCD
+    Control -.->|SharedState| LCD
+
     Sensor --> Watchdog
     EmgTask --> Watchdog
     Network --> Watchdog
-    LCD --> Watchdog
     Control --> Watchdog
+    LCD --> Watchdog
+
     Watchdog --> Idle
-    Idle -->|ไม่ใช่| Timer
+    Idle -->|ไม่ใช่| Watchdog
     Idle -->|ใช่| Sleep
-    Sleep --> Wake
-    Wake --> Init
+    Sleep --> Wake --> Init
 
     classDef base fill:#ffffff,stroke:#222222,stroke-width:1.5px,color:#000000;
     classDef startend fill:#ffffff,stroke:#222222,stroke-width:2px,color:#000000;
@@ -172,8 +157,10 @@ flowchart TD
     class Start startend;
     class WS,POST io;
     class Idle decision;
-    class Init,Tasks,Timer,Sensor,UART,I2C,State,EmgTask,EmgFrame,Network,JSON,ButtonISR,ButtonQueue,Control,LCD,Watchdog,Sleep,Wake base;
+    class Init,Tasks,Sensor,EmgTask,Network,Control,LCD,ButtonISR,Watchdog,Sleep,Wake base;
 ```
+
+หมายเหตุ: เส้นทึบแสดงลำดับการสร้าง/ควบคุม task และ watchdog ส่วนเส้นประแสดงการส่งข้อมูลระหว่าง task ผ่าน `emgQueue` และ `SharedState` (ไม่ได้วนผ่าน hardware timer ตัวเดียวกันทุก task เพราะ NetworkTask, EmgStreamTask และ LcdTask ใช้ `vTaskDelayUntil` ของตัวเอง มีเพียง SensorTask เท่านั้นที่ตื่นด้วย semaphore จาก hardware timer ทุก 10 ms)
 
 ## หมายเหตุสำหรับการแคปภาพ
 
