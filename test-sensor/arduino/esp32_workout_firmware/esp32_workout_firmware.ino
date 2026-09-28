@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include <Adafruit_MLX90614.h>
 #include "MAX30105.h"
-#include "heartRate.h"
 #include <LiquidCrystal_I2C.h>
 #include "board_config.h"
 
@@ -66,6 +65,7 @@ Adafruit_MLX90614 mlx;
 
 WiFiClient httpClient;
 HTTPClient http;
+bool tcpNoDelaySet = false;
 
 const int32_t  HTTP_CONNECT_TIMEOUT_MS = 1500;
 const uint16_t HTTP_READ_TIMEOUT_MS    = 3000;
@@ -78,7 +78,7 @@ bool statusMax = false;
 bool statusMlx = false;
 
 const unsigned long SAMPLE_INTERVAL_MS = 10;
-const unsigned long SEND_INTERVAL_MS = 250;
+const unsigned long SEND_INTERVAL_MS = 10;
 const unsigned long LCD_UPDATE_INTERVAL_MS = 200;
 const unsigned long MLX_READ_INTERVAL_MS = 250;
 const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000;
@@ -218,6 +218,7 @@ void setupHttpClient() {
   http.setReuse(true);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  tcpNoDelaySet = false;
 }
 
 void applyServerReply(const String &body) {
@@ -541,6 +542,7 @@ void enterLightSleepUntilWake() {
   }
 
   WiFi.disconnect(true);
+  tcpNoDelaySet = false;
 
   esp_task_wdt_delete(sensorTaskHandle);
   esp_task_wdt_delete(networkTaskHandle);
@@ -727,6 +729,10 @@ void networkTask(void *pvParameters) {
 
     if (code > 0) {
       consecutiveFailures = 0;
+      if (!tcpNoDelaySet) {
+        httpClient.setNoDelay(true);
+        tcpNoDelaySet = true;
+      }
       applyServerReply(http.getString());
       Serial.printf("Telemetry sent -> Code: %d (emg batch=%d) [POST took %lums]\n", code, sentBatchSize, postDurationMs);
       if (code >= 400) Serial.printf("Payload was: %s\n", payload);
