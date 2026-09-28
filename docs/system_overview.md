@@ -17,7 +17,7 @@ watchdog 5 วินาทีแทน 8 วินาที และไม่�
 flowchart LR
     subgraph Board["ชุดเซนเซอร์"]
         UNO["Arduino Uno<br/>sEMG (A0) + FSR (A1)<br/>100 Hz"]
-        ESP["ESP32<br/>FreeRTOS 4 tasks<br/>MPU · MAX30102 · MLX90614<br/>ปุ่ม A/B · LCD · Buzzer"]
+        ESP["ESP32<br/>FreeRTOS 5 tasks<br/>MPU · MAX30102 · MLX90614<br/>ปุ่ม A/B · LCD · Buzzer"]
         UNO -- "UART 9600<br/>บรรทัด emg,fsr ทุก 10 ms" --> ESP
     end
 
@@ -28,9 +28,11 @@ flowchart LR
         DB[("MongoDB")]
     end
 
-    ESP -- "HTTP POST /api/telemetry<br/>ทุก 250 ms (WiFi)" --> SK
+    ESP -- "WebSocket /ws/emg<br/>EMG ทุก 20 ms" --> SK
+    ESP -- "HTTP POST /api/telemetry<br/>เซนเซอร์อื่น + ปุ่ม ทุก 100 ms" --> SK
     SK -- "คำตอบ: ค่า calibrate FSR<br/>+ คำสั่งทดสอบ buzzer" --> ESP
-    SK -- "SSE /api/telemetry/stream<br/>telemetry · button · emgRep" --> BR
+    SK -- "WebSocket /ws/emg<br/>emg · emgRep" --> BR
+    SK -- "SSE /api/telemetry/stream<br/>telemetry · button" --> BR
     BR -- "/api/proxy → REST<br/>บันทึกเซต, calibration, grip test" --> API
     SK -- "POST /v1/telemetry<br/>(เฉพาะตอนกำลังบันทึก)" --> API
     API --- DB
@@ -39,8 +41,8 @@ flowchart LR
 | ส่วน | หน้าที่หลัก |
 |---|---|
 | **Arduino Uno** | อ่าน sEMG กับ FSR ด้วย ADC 10-bit ที่ 100 Hz แล้วสเกลเป็น 0–4095 ส่งให้ ESP32 ทาง UART |
-| **ESP32** | อ่านเซนเซอร์ที่เหลือผ่าน I2C, รวมข้อมูลเป็น JSON ส่งเข้าเว็บทุก 250 ms, รับปุ่ม A/B, แสดง LCD, เตือนด้วย buzzer, เข้า light sleep เมื่อไม่ได้ใช้งาน |
-| **SvelteKit server** | รับ telemetry, แปลง ADC เป็นหน่วยที่ใช้ได้ (µV, % แรงบีบ), **นับ rep จาก EMG**, กระจายข้อมูลสดให้ browser ทาง SSE, ส่งค่า calibrate กลับให้บอร์ด |
+| **ESP32** | ส่ง EMG เข้าเว็บทาง WebSocket ทุก 20 ms, อ่านเซนเซอร์ที่เหลือผ่าน I2C แล้วรวมเป็น JSON POST เข้าเว็บทุก 100 ms, รับปุ่ม A/B, แสดง LCD, เตือนด้วย buzzer, เข้า light sleep เมื่อไม่ได้ใช้งาน |
+| **SvelteKit server** | รับ telemetry, แปลง ADC เป็นหน่วยที่ใช้ได้ (µV, % แรงบีบ), **นับ rep จาก EMG**, กระจาย EMG ให้ browser ทาง WebSocket และเซนเซอร์อื่นทาง SSE, ส่งค่า calibrate กลับให้บอร์ด |
 | **Browser** | แสดงผลสด, คุมลำดับขั้น calibrate → readiness → เซต → สรุป, จับคู่ความเร็วกับแต่ละ rep, บันทึกเซตไป backend |
 | **FastAPI + MongoDB** | เก็บผู้ใช้, ผลแต่ละเซต (`session_results`), ค่า calibrate, ผลทดสอบแรงบีบ (`grip_tests`), telemetry ดิบระหว่างบันทึก |
 
@@ -54,12 +56,21 @@ Uno ส่ง 1 บรรทัดทุก 10 ms รูปแบบ `<emg>,<fsr
 (FSR ถูกกลับด้านให้ค่ามาก = บีบแรง) ESP32 อ่านบรรทัดเหล่านี้แบบ non-blocking ใน `SensorTask`
 ถ้าไม่มีข้อมูลเกิน 500 ms จะขึ้น `[UART] Uno EMG/FSR link LOST` ใน Serial Monitor
 
-### 2.2 ESP32 → เว็บ (HTTP POST ทุก 250 ms)
+### 2.2 ESP32 → เว็บ: EMG ทาง WebSocket (`/ws/emg?role=device`)
+
+EMG เป็นสัญญาณเดียวที่ไม่ได้ไปกับ POST `EmgStreamTask` ดึง sample ที่ค้างในคิว (100 Hz) ส่งเป็น text frame
+ทุก 20 ms รูปแบบ `2612,2618` (ราว 2 ค่าต่อ frame ค่าดิบ ADC 0–4095) ผ่านการเชื่อมต่อ WebSocket ที่เปิดค้างไว้
+ถ้าหลุด library จะต่อใหม่เองทุก 2 วินาที ระหว่างหลุด sample ในคิวถูกทิ้ง ไม่ส่งย้อนหลัง
+
+ฝั่งเซิร์ฟเวอร์ WebSocket อยู่ที่ [`emg-ws.js`](../frontend/emg-ws.js) ต่อกับ http server โดยตรง
+(dev: plugin ใน `vite.config.ts`, production: [`server.js`](../frontend/server.js)) แล้วส่งค่าเข้า
+`telemetryStore.ts` ผ่าน `globalThis.__cyberpumpEmg`
+
+### 2.3 ESP32 → เว็บ: เซนเซอร์อื่นทาง HTTP POST (ทุก 100 ms)
 
 ```json
 {
   "board": "esp32",
-  "emg": { "raw": [2612, 2618, 2605, "... ราว 25 ค่า (ทุก 10 ms)"] },
   "fsr": { "force": 2210, "stability": 92.5 },
   "mpu": { "velocity": 0.12, "peakVelocity": 0.48 },
   "vitals": { "hr": 88, "spo2": 97.0, "skinTemp": 33.40, "deltaTemp": 0.20 },
@@ -67,13 +78,11 @@ Uno ส่ง 1 บรรทัดทุก 10 ms รูปแบบ `<emg>,<fsr
 }
 ```
 
-- `emg.raw` ส่งครบทุก sample ของ 250 ms ที่ผ่านมา (คิวใน ESP32 เก็บไว้ให้) server จึงนับ rep ได้ละเอียดระดับ 10 ms
-  ทั้งที่ส่งแค่ 4 ครั้งต่อวินาที
-- `mpu.peakVelocity` คือความเร็วสูงสุดในช่วง 250 ms นั้น เพราะจุดพีคของ rep มักเกิดระหว่างรอบส่ง
+- `mpu.peakVelocity` คือความเร็วสูงสุดในช่วง 100 ms นั้น เพราะจุดพีคของ rep มักเกิดระหว่างรอบส่ง
 - `buttons.a/b` เป็น event ครั้งเดียว: ถ้ากดปุ่ม ค่าจะเป็น `true` ในแพ็กเก็ตถัดไปแพ็กเก็ตเดียว
   (ถ้าส่งไม่สำเร็จ ESP32 จะเก็บไว้ส่งรอบหน้า ปุ่มที่กดจึงไม่หาย)
 
-### 2.3 เว็บ → ESP32 (ในคำตอบของ POST เดียวกัน)
+### 2.4 เว็บ → ESP32 (ในคำตอบของ POST เดียวกัน)
 
 ```json
 { "success": true, "fsrZero": 1431, "fsrMax": 4030, "beep": false }
@@ -85,13 +94,17 @@ Uno ส่ง 1 บรรทัดทุก 10 ms รูปแบบ `<emg>,<fsr
   เองสำหรับ buzzer ถ้ายังไม่ได้ calibrate ทั้งสองค่าเป็น 0 และ buzzer จะยังไม่เตือน
 - `beep`: เป็น `true` ครั้งเดียวหลังผู้ใช้กด "ทดสอบ buzzer" ในหน้า Calibration บอร์ดจะดัง 3 ครั้ง
 
-### 2.4 เว็บ server → browser (SSE `/api/telemetry/stream`)
+### 2.5 เว็บ server → browser
 
-| Event | เมื่อไร | ใช้ทำอะไร |
-|---|---|---|
-| `telemetry` | ทุกครั้งที่บอร์ด POST เข้ามา | ค่าสดทั้งหมด (EMG %MVC, แรงบีบ %, ความเร็ว, หัวใจ ฯลฯ) และสถานะตัวนับ rep |
-| `emgRep` | ตัวตรวจจับบน server นับได้ 1 rep | browser บันทึก rep เข้าเซต พร้อมความเร็วสูงสุดของ rep นั้น |
-| `button` | บอร์ดส่ง `buttons.a/b = true` | browser เริ่ม/จบเซต หรือจบการออกกำลังกาย |
+EMG ไปทาง **WebSocket `/ws/emg`** ส่วนอื่นไปทาง **SSE `/api/telemetry/stream`**:
+
+| ช่องทาง | ข้อความ | เมื่อไร | ใช้ทำอะไร |
+|---|---|---|---|
+| WebSocket | `init` | ตอนเปิดการเชื่อมต่อ | buffer EMG ล่าสุด 150 ค่า + ค่า envelope + สถานะตัวนับ rep |
+| WebSocket | `emg` | ทุก frame ที่บอร์ดส่งมา (~20 ms) | sample ใหม่ (browser ต่อท้าย buffer เอง), µV, %MVC, สถานะตัวนับ rep |
+| WebSocket | `emgRep` | ตัวตรวจจับบน server นับได้ 1 rep | browser บันทึก rep เข้าเซต พร้อมความเร็วสูงสุดของ rep นั้น |
+| SSE | `telemetry` | ทุกครั้งที่บอร์ด POST เข้ามา | แรงบีบ %, ความเร็ว, หัวใจ, อุณหภูมิ, สถานะอุปกรณ์, ค่า calibrate (ไม่มี EMG) |
+| SSE | `button` | บอร์ดส่ง `buttons.a/b = true` | browser เริ่ม/จบเซต หรือจบการออกกำลังกาย |
 
 ## 3. การนับ rep และการแปลงค่า (ทำบน SvelteKit server)
 
@@ -128,9 +141,11 @@ sequenceDiagram
     E->>S: POST {buttons.a: true}
     S->>B: SSE button
     B->>B: เริ่มเซต → Live Studio
-    loop ระหว่างเซต (ทุก 250 ms)
-        E->>S: POST EMG/FSR/MPU/vitals
-        S->>B: SSE telemetry (+ emgRep ทุกครั้งที่นับได้)
+    loop ระหว่างเซต
+        E->>S: WebSocket EMG (ทุก 20 ms)
+        S->>B: WebSocket emg (+ emgRep ทุกครั้งที่นับได้)
+        E->>S: POST FSR/MPU/vitals (ทุก 100 ms)
+        S->>B: SSE telemetry
     end
     U->>E: กดปุ่ม A อีกครั้ง
     E->>S: POST {buttons.a: true}
@@ -150,13 +165,14 @@ sequenceDiagram
 
 ## 5. RTOS บน ESP32
 
-ESP32 รัน FreeRTOS อยู่แล้วใต้ Arduino core เฟิร์มแวร์นี้แบ่งงานเป็น 4 task แทน `loop()` เดียว
+ESP32 รัน FreeRTOS อยู่แล้วใต้ Arduino core เฟิร์มแวร์นี้แบ่งงานเป็น 5 task แทน `loop()` เดียว
 เพื่อไม่ให้งานช้าอย่าง WiFi POST ไปขวางการอ่านเซนเซอร์ 100 Hz
 
 | Task | Core | Priority | ปลุกด้วย | หน้าที่ |
 |---|---|---|---|---|
 | `SensorTask` | 1 | 3 (สูงสุด) | semaphore จาก hardware timer ทุก 10 ms | อ่าน UART จาก Uno, MPU (คำนวณความเร็ว), MAX30102, MLX90614 แล้วเขียนค่าล่าสุดลง `shared` และดัน EMG sample เข้าคิว |
-| `NetworkTask` | 0 | 2 | `vTaskDelayUntil` ทุก 250 ms | ดึง EMG ทั้งคิว + snapshot จาก `shared` → POST เข้าเว็บ → อ่านคำตอบ (ค่า calibrate / คำสั่ง beep) |
+| `EmgStreamTask` | 0 | 3 | `vTaskDelayUntil` ทุก 20 ms | ดึง EMG ทั้งคิว → ส่งเป็น WebSocket frame, เรียก `loop()` ของ WebSocket client (ต่อใหม่เองถ้าหลุด) |
+| `NetworkTask` | 0 | 2 | `vTaskDelayUntil` ทุก 100 ms | snapshot จาก `shared` (ไม่มี EMG) → POST เข้าเว็บ → อ่านคำตอบ (ค่า calibrate / คำสั่ง beep) |
 | `ControlTask` | 1 | 2 | คิวปุ่มจาก ISR (รอสูงสุด 100 ms) | จัดการสถานะเซตตามปุ่ม, คุม buzzer, ตรวจว่าควรเข้า sleep หรือยัง |
 | `LcdTask` | 1 | 1 (ต่ำสุด) | `vTaskDelayUntil` ทุก 200 ms | วาดจอ LCD (เลขเซต, RUNNING/RESTING, เวลา) |
 
@@ -165,7 +181,7 @@ flowchart TB
     TMR(["Hardware timer ISR<br/>ทุก 10 ms"]) -- "give sampleTickSemaphore" --> ST
     BTN(["GPIO ISR ปุ่ม A/B<br/>(ขอบขาลง)"]) -- "buttonEventQueue" --> CT
 
-    ST["SensorTask<br/>core 1 · prio 3"] -- "emgQueue (64 ค่า)" --> NT
+    ST["SensorTask<br/>core 1 · prio 3"] -- "emgQueue (64 ค่า)" --> ET["EmgStreamTask<br/>core 0 · prio 3"]
     ST -- "เขียน shared<br/>(stateMutex)" --> SH[("SharedState")]
     SH -- "อ่าน snapshot" --> NT["NetworkTask<br/>core 0 · prio 2"]
     NT -- "เขียนค่า calibrate / beep" --> SH
@@ -173,7 +189,7 @@ flowchart TB
     LT["LcdTask<br/>core 1 · prio 1"] -- "อ่านสถานะเซต" --> SH
 
     ST -.-|i2cMutex| LT
-    WDT{{"Task Watchdog 8 s<br/>ทุก task ต้อง reset"}} -.- ST & NT & CT & LT
+    WDT{{"Task Watchdog 8 s<br/>ทุก task ต้อง reset"}} -.- ST & ET & NT & CT & LT
 ```
 
 **กลไกที่ใช้**
@@ -182,12 +198,13 @@ flowchart TB
   ไม่ต้องวนเช็ก `millis()`
 - **GPIO interrupt (ปุ่ม):** ISR ส่งรหัสปุ่มเข้าคิวแล้วจบ งานจริง (เช็กว่ากดจริงไหม, เปลี่ยนสถานะเซต) ทำใน `ControlTask`
   ซึ่งรอ 30 ms ให้หน้าสัมผัสนิ่ง อ่านขาซ้ำ และรับการกดเพียงครั้งเดียวต่อการกดหนึ่งรอบ
-- **Queue:** `emgQueue` ส่ง EMG จาก task 100 Hz ไป task 4 Hz โดยไม่ต้องล็อก ถ้าคิวเต็มจะทิ้งค่าที่เก่าที่สุด
+- **Queue:** `emgQueue` ส่ง EMG จาก task 100 Hz ไป `EmgStreamTask` (50 Hz) โดยไม่ต้องล็อก ถ้าคิวเต็มจะทิ้งค่าที่เก่าที่สุด
   `SensorTask` จึงไม่ถูกบล็อก
 - **Mutex:** `stateMutex` ป้องกัน `SharedState` ที่หลาย task อ่าน/เขียน `i2cMutex` กันไม่ให้ `SensorTask`
   กับ `LcdTask` ใช้บัส I2C พร้อมกัน (LCD กับเซนเซอร์อยู่บัสเดียวกัน)
-- **แยก core:** `NetworkTask` อยู่ core 0 คนเดียว POST ที่ใช้เวลา 80–110 ms (หรือนานกว่าตอน WiFi แย่)
-  จึงไม่ทำให้การอ่านเซนเซอร์บน core 1 ช้าลง
+- **แยก core:** งานเครือข่ายทั้งสอง (`EmgStreamTask`, `NetworkTask`) อยู่ core 0 POST ที่ใช้เวลา 80–110 ms
+  (หรือนานกว่าตอน WiFi แย่) จึงไม่ทำให้การอ่านเซนเซอร์บน core 1 ช้าลง และ `EmgStreamTask` มี priority สูงกว่า
+  `NetworkTask` การรอ POST จึงไม่ทำให้ EMG ส่งช้า
 - **Task watchdog (8 วินาที):** ทุก task ต้องเรียก `esp_task_wdt_reset()` ในแต่ละรอบ ถ้า task ไหนค้างเกิน 8 วินาที
   ชิปจะ reboot เอง HTTP timeout ถูกตั้งไว้สั้นกว่านี้ (connect 1.5 s, read 3 s) เพื่อไม่ให้ POST ที่ค้างทำให้บอร์ดรีสตาร์ท
 

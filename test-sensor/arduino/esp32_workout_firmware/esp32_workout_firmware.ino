@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <Adafruit_MLX90614.h>
 #include "MAX30105.h"
+#include "heartRate.h"
+#include <WebSocketsClient.h>
 #include <LiquidCrystal_I2C.h>
 #include "board_config.h"
 
@@ -59,13 +61,20 @@ LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 const char* ssid     = "Nig";
 const char* password = "chicken123123";
 
-const char* serverUrl = "http://172.30.81.83:5173/api/telemetry";
+const char* SERVER_HOST = "172.30.81.83";
+const uint16_t SERVER_PORT = 5173;
+const String serverUrl = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
+const char* EMG_WS_PATH = "/ws/emg?role=device";
 MAX30105 max30102;
 Adafruit_MLX90614 mlx;
 
 WiFiClient httpClient;
 HTTPClient http;
 bool tcpNoDelaySet = false;
+
+WebSocketsClient emgSocket;
+const unsigned long EMG_STREAM_INTERVAL_MS = 20;
+const unsigned long EMG_WS_RECONNECT_MS = 2000;
 
 const int32_t  HTTP_CONNECT_TIMEOUT_MS = 1500;
 const uint16_t HTTP_READ_TIMEOUT_MS    = 3000;
@@ -78,7 +87,7 @@ bool statusMax = false;
 bool statusMlx = false;
 
 const unsigned long SAMPLE_INTERVAL_MS = 10;
-const unsigned long SEND_INTERVAL_MS = 10;
+const unsigned long SEND_INTERVAL_MS = 100;
 const unsigned long LCD_UPDATE_INTERVAL_MS = 200;
 const unsigned long MLX_READ_INTERVAL_MS = 250;
 const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000;
@@ -184,6 +193,7 @@ TaskHandle_t sensorTaskHandle = nullptr;
 TaskHandle_t networkTaskHandle = nullptr;
 TaskHandle_t lcdTaskHandle = nullptr;
 TaskHandle_t controlTaskHandle = nullptr;
+TaskHandle_t emgStreamTaskHandle = nullptr;
 
 void connectWiFi() {
   Serial.println("\n[WiFi] Setting up connection for CoEIoT...");
@@ -548,6 +558,7 @@ void enterLightSleepUntilWake() {
   esp_task_wdt_delete(networkTaskHandle);
   esp_task_wdt_delete(lcdTaskHandle);
   esp_task_wdt_delete(controlTaskHandle);
+  esp_task_wdt_delete(emgStreamTaskHandle);
   esp_task_wdt_deinit();
 
   if (SLEEP_WAKE_SOURCE_MASK & WAKE_SRC_EXT0) {
@@ -567,6 +578,7 @@ void enterLightSleepUntilWake() {
   esp_task_wdt_add(networkTaskHandle);
   esp_task_wdt_add(lcdTaskHandle);
   esp_task_wdt_add(controlTaskHandle);
+  esp_task_wdt_add(emgStreamTaskHandle);
 
   connectWiFi();
 }
@@ -686,17 +698,6 @@ void networkTask(void *pvParameters) {
       continue;
     }
 
-    char emgArray[400];
-    int pos = snprintf(emgArray, sizeof(emgArray), "[");
-    int sentBatchSize = 0;
-    int sample;
-    while (xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
-      pos += snprintf(emgArray + pos, sizeof(emgArray) - pos, "%s%d", sentBatchSize == 0 ? "" : ",", sample);
-      sentBatchSize++;
-      if (pos >= (int)sizeof(emgArray) - 8) break;
-    }
-    snprintf(emgArray + pos, sizeof(emgArray) - pos, "]");
-
     SharedState snap;
     bool sentButtonA = false, sentButtonB = false;
     if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -712,12 +713,11 @@ void networkTask(void *pvParameters) {
     char payload[768];
     snprintf(payload, sizeof(payload),
              "{\"board\":\"esp32\","
-             "\"emg\":{\"raw\":%s},"
              "\"fsr\":{\"force\":%d,\"stability\":%.1f},"
              "\"mpu\":{\"velocity\":%.3f,\"peakVelocity\":%.3f},"
              "\"vitals\":{\"hr\":%d,\"spo2\":%.1f,\"skinTemp\":%.2f,\"deltaTemp\":%.2f},"
              "\"buttons\":{\"a\":%s,\"b\":%s}}",
-             emgArray, snap.fsrLatest, snap.fsrStability,
+             snap.fsrLatest, snap.fsrStability,
              snap.velocity, snap.peakVelocity,
              snap.beatAvg, snap.spo2Estimate, snap.skinTemp, snap.deltaTemp,
              sentButtonA ? "true" : "false", sentButtonB ? "true" : "false");
@@ -734,7 +734,7 @@ void networkTask(void *pvParameters) {
         tcpNoDelaySet = true;
       }
       applyServerReply(http.getString());
-      Serial.printf("Telemetry sent -> Code: %d (emg batch=%d) [POST took %lums]\n", code, sentBatchSize, postDurationMs);
+      Serial.printf("Telemetry sent -> Code: %d [POST took %lums]\n", code, postDurationMs);
       if (code >= 400) Serial.printf("Payload was: %s\n", payload);
     } else {
       if (consecutiveFailures < 255) consecutiveFailures++;
@@ -744,7 +744,7 @@ void networkTask(void *pvParameters) {
                     WiFi.localIP().toString().c_str(),
                     WiFi.gatewayIP().toString().c_str(),
                     WiFi.RSSI(),
-                    serverUrl);
+                    serverUrl.c_str());
 
       setupHttpClient();
 
@@ -761,6 +761,35 @@ void networkTask(void *pvParameters) {
         }
       }
     }
+  }
+}
+
+void onEmgSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
+  if (type == WStype_CONNECTED) Serial.println("[EMG-WS] connected");
+  else if (type == WStype_DISCONNECTED) Serial.println("[EMG-WS] disconnected");
+}
+
+void emgStreamTask(void *pvParameters) {
+  emgSocket.begin(SERVER_HOST, SERVER_PORT, EMG_WS_PATH);
+  emgSocket.onEvent(onEmgSocketEvent);
+  emgSocket.setReconnectInterval(EMG_WS_RECONNECT_MS);
+
+  TickType_t lastWake = xTaskGetTickCount();
+  for (;;) {
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(EMG_STREAM_INTERVAL_MS));
+    esp_task_wdt_reset();
+
+    if (WiFi.status() == WL_CONNECTED) emgSocket.loop();
+
+    char frame[EMG_QUEUE_LEN * 6];
+    int pos = 0;
+    int count = 0;
+    int sample;
+    while (pos < (int)sizeof(frame) - 8 && xQueueReceive(emgQueue, &sample, 0) == pdTRUE) {
+      pos += snprintf(frame + pos, sizeof(frame) - pos, "%s%d", count == 0 ? "" : ",", sample);
+      count++;
+    }
+    if (count > 0 && emgSocket.isConnected()) emgSocket.sendTXT(frame, pos);
   }
 }
 
@@ -966,11 +995,13 @@ void setup() {
   xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, nullptr, 2, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(lcdTask, "LcdTask", 2560, nullptr, 1, &lcdTaskHandle, 1);
   xTaskCreatePinnedToCore(controlTask, "ControlTask", 2560, nullptr, 2, &controlTaskHandle, 1);
+  xTaskCreatePinnedToCore(emgStreamTask, "EmgStreamTask", 6144, nullptr, 3, &emgStreamTaskHandle, 0);
 
   esp_task_wdt_add(sensorTaskHandle);
   esp_task_wdt_add(networkTaskHandle);
   esp_task_wdt_add(lcdTaskHandle);
   esp_task_wdt_add(controlTaskHandle);
+  esp_task_wdt_add(emgStreamTaskHandle);
 
   Serial.printf("[BOOT] Free heap after task creation: %lu bytes\n", (unsigned long)esp_get_free_heap_size());
 }

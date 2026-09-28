@@ -9,24 +9,11 @@ import {
 	type EmgRepState
 } from './emgRepDetector';
 
-export interface EmgPacket {
-	raw?: number | number[];
-	rms?: number;
-	peak?: number;
-	mvcPercent?: number;
-	timestamp?: number;
-	board?: string;
-}
-
+// POST /api/telemetry: every sensor except EMG, which streams over the /ws/emg
+// WebSocket instead (emg-ws.js -> ingestEmg below).
 export interface FullTelemetryPacket {
 	board?: string;
 	timestamp?: number;
-	emg?: {
-		raw?: number | number[];
-		rms?: number;
-		peak?: number;
-		mvcPercent?: number;
-	};
 	fsr?: {
 		force?: number;
 		stability?: number;
@@ -74,8 +61,8 @@ const ADC_VREF_MV = 3300;
 const EMG_GAIN = 1000;
 
 // The ESP32 samples the Uno's latest EMG value at a fixed 100 Hz (SAMPLE_INTERVAL_MS
-// in esp32_workout_firmware.ino) and batches ~25 of them per POST, so each array
-// element is 10 ms apart regardless of network timing.
+// in esp32_workout_firmware.ino) and sends a few of them per WebSocket frame, so each
+// sample is 10 ms apart regardless of network timing.
 const EMG_SAMPLE_MS = 10;
 // Moving-average window smoothing the SIG output into the envelope rep counting uses.
 const EMG_ENVELOPE_WINDOW = 10; // samples = 100 ms
@@ -189,26 +176,48 @@ class ServerTelemetryState {
 		this.emitter.setMaxListeners(100);
 	}
 
-	ingestEmg(data: EmgPacket) {
+	/**
+	 * One WebSocket frame of raw EMG ADC samples from the board. Browsers get only the
+	 * new samples (they keep their own rolling buffer) plus the current envelope values.
+	 * Backend persistence rides on the next telemetry POST, which forwards state.emg.
+	 */
+	ingestEmg(raws: number[]) {
 		const now = Date.now();
-		this.recordPacket(data.board || 'unknown');
-		this.ingestEmgSamples(data, data.timestamp || now);
+		const samples = this.ingestEmgSamples(raws, now);
 		this.state.sensors.emg.lastSeen = now;
-
-		this.broadcast('emg', this.state.emg);
-		this.broadcast('telemetry', this.state);
-		this.forwardToBackend();
+		const { level, rms, mvcPercent, isHighTension } = this.state.emg;
+		this.broadcast('emgStream', {
+			samples,
+			level,
+			rms,
+			mvcPercent,
+			isHighTension,
+			emgRep: this.state.emgRep,
+			lastSeen: now
+		});
 	}
 
-	// Shared by /api/emg and /api/telemetry: converts each raw sample, smooths it into
-	// the envelope, runs the rep detector on every sample (not just the latest one) and
-	// broadcasts an `emgRep` event per counted rep.
-	private ingestEmgSamples(
-		emg: { raw?: number | number[]; rms?: number; peak?: number; mvcPercent?: number },
-		timestamp: number
-	) {
+	/** What a browser gets when it opens /ws/emg. */
+	emgSnapshot() {
+		return {
+			emg: this.state.emg,
+			emgRep: this.state.emgRep,
+			lastSeen: this.state.sensors.emg.lastSeen
+		};
+	}
+
+	/** The SSE payload: everything but EMG, which browsers get from /ws/emg. */
+	sseSnapshot() {
+		const { emg: _emg, emgRep: _emgRep, ...rest } = this.state;
+		return rest;
+	}
+
+	// Converts each raw sample, smooths it into the envelope, runs the rep detector on
+	// every sample (not just the latest one) and broadcasts an `emgRep` event per counted
+	// rep. Returns the baseline-adjusted samples appended to the rolling buffer.
+	private ingestEmgSamples(raws: number[], timestamp: number): number[] {
 		const { emgBaseline, emgMvc } = this.state.calibration;
-		const raws = Array.isArray(emg.raw) ? emg.raw : emg.raw !== undefined ? [emg.raw] : [];
+		const fresh: number[] = [];
 
 		let lastUv = this.state.emg.raw;
 		let envelopeUv = this.state.emg.rms;
@@ -220,6 +229,7 @@ class ServerTelemetryState {
 			lastUv = unadjustedUv - emgBaseline;
 			this.rawBuffer.shift();
 			this.rawBuffer.push(round3(lastUv));
+			fresh.push(round3(lastUv));
 
 			this.envelopeWindow.push(Math.max(0, lastUv));
 			if (this.envelopeWindow.length > EMG_ENVELOPE_WINDOW) this.envelopeWindow.shift();
@@ -231,18 +241,15 @@ class ServerTelemetryState {
 			if (rep) this.broadcast('emgRep', rep satisfies EmgRepEvent);
 		}
 
-		const rms = emg.rms !== undefined ? round3(emg.rms) : round3(envelopeUv);
-		const mvcPercent =
-			emg.mvcPercent !== undefined
-				? round3(emg.mvcPercent)
-				: Math.min(100, round3((rms / (emgMvc || 1)) * 100));
+		const rms = round3(envelopeUv);
+		const mvcPercent = Math.min(100, round3((rms / (emgMvc || 1)) * 100));
 
 		this.state.emg = {
 			raw: round3(lastUv),
 			rawBuffer: [...this.rawBuffer],
 			level: raws.length ? round3(levelSum / raws.length) : this.state.emg.level,
 			rms,
-			peak: emg.peak !== undefined ? round3(emg.peak) : Math.max(rms, this.state.emg.peak),
+			peak: Math.max(rms, this.state.emg.peak),
 			mvcPercent,
 			isHighTension: mvcPercent >= this.state.calibration.emgRepPeakPct,
 			windowPeakPct: round3(windowPeakPct),
@@ -252,16 +259,12 @@ class ServerTelemetryState {
 			state: this.emgRepDetector.state,
 			count: this.emgRepDetector.count
 		};
+		return fresh;
 	}
 
 	ingestFullTelemetry(data: FullTelemetryPacket) {
 		const now = Date.now();
 		this.recordPacket(data.board || 'esp32');
-
-		if (data.emg) {
-			this.ingestEmgSamples(data.emg, data.timestamp || now);
-			this.state.sensors.emg.lastSeen = now;
-		}
 
 		if (data.fsr) {
 			const gripPercent =
@@ -315,7 +318,7 @@ class ServerTelemetryState {
 		if (data.buttons?.a) this.broadcast('button', { id: 'a' });
 		if (data.buttons?.b) this.broadcast('button', { id: 'b' });
 
-		this.broadcast('telemetry', this.state);
+		this.broadcast('telemetry', this.sseSnapshot());
 		this.forwardToBackend();
 	}
 
@@ -482,3 +485,21 @@ class ServerTelemetryState {
 }
 
 export const serverTelemetry = new ServerTelemetryState();
+
+// emg-ws.js runs on the raw Node http server, outside SvelteKit's module graph, so it
+// reaches this store through a global instead of an import (see its header comment).
+export interface EmgStreamBridge {
+	ingestEmg(raws: number[]): void;
+	snapshot(): ReturnType<ServerTelemetryState['emgSnapshot']>;
+	subscribe(event: 'emgStream' | 'emgRep', listener: (data: unknown) => void): () => void;
+}
+
+declare global {
+	var __cyberpumpEmg: EmgStreamBridge | undefined;
+}
+
+globalThis.__cyberpumpEmg = {
+	ingestEmg: (raws) => serverTelemetry.ingestEmg(raws),
+	snapshot: () => serverTelemetry.emgSnapshot(),
+	subscribe: (event, listener) => serverTelemetry.subscribe(event, listener)
+};

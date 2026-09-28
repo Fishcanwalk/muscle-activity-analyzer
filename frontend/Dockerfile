@@ -28,8 +28,10 @@ ENV HOST=0.0.0.0
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/build ./build
+# Custom entry: the SvelteKit handler plus the EMG WebSocket at /ws/emg.
+COPY --from=builder /app/server.js /app/emg-ws.js ./
 
 EXPOSE 3000
 
-CMD ["node", "build"]
+CMD ["node", "server.js"]
 

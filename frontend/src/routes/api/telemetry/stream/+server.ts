@@ -14,8 +14,8 @@ export const GET: RequestHandler = async () => {
 		start(controller) {
 			const encoder = new TextEncoder();
 
-			// Send initial state
-			const initialPacket = `event: init\ndata: ${JSON.stringify(serverTelemetry.state)}\n\n`;
+			// Send initial state. EMG isn't on this stream: browsers get it from /ws/emg.
+			const initialPacket = `event: init\ndata: ${JSON.stringify(serverTelemetry.sseSnapshot())}\n\n`;
 			controller.enqueue(encoder.encode(initialPacket));
 
 			// Subscribe to live telemetry
@@ -38,16 +38,6 @@ export const GET: RequestHandler = async () => {
 				}
 			});
 
-			// One event per rep counted by the server-side EMG detector (emgRepDetector.ts)
-			const cleanupEmgRep = serverTelemetry.subscribe('emgRep', (data) => {
-				try {
-					const msg = `event: emgRep\ndata: ${JSON.stringify(data)}\n\n`;
-					controller.enqueue(encoder.encode(msg));
-				} catch {
-					// Client disconnected
-				}
-			});
-
 			const heartbeat = setInterval(() => {
 				try {
 					controller.enqueue(encoder.encode(': ping\n\n'));
@@ -60,7 +50,6 @@ export const GET: RequestHandler = async () => {
 				clearInterval(heartbeat);
 				cleanupTelemetry();
 				cleanupButton();
-				cleanupEmgRep();
 			};
 		},
 		cancel() {

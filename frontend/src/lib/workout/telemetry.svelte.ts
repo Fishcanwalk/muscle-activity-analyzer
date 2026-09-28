@@ -102,6 +102,12 @@ class TelemetryManager {
 	private reconnectDelayMs = 1000;
 	private readonly RECONNECT_MAX_DELAY_MS = 30000;
 
+	// EMG has its own channel: the /ws/emg WebSocket (emg-ws.js), not the SSE stream above.
+	emgSocketState = $state<'connecting' | 'open' | 'closed'>('connecting');
+	private emgSocket: WebSocket | null = null;
+	private emgReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private emgReconnectDelayMs = 1000;
+
 	// The board's per-batch peak velocity (timestamped with performance.now()), for each
 	// rep's peak over its own window.
 	private velocitySamples: { at: number; v: number }[] = [];
@@ -112,6 +118,7 @@ class TelemetryManager {
 	constructor() {
 		if (typeof window !== 'undefined') {
 			this.connectApiStream();
+			this.connectEmgSocket();
 			setInterval(() => {
 				this.now = Date.now();
 			}, 1000);
@@ -152,24 +159,6 @@ class TelemetryManager {
 						// A new set starts with an empty camera window, so nothing seen while resting counts.
 						if (workout.isSetRunning && !this.wasSetRunning) this.resetRepWindow();
 						this.wasSetRunning = workout.isSetRunning;
-
-						if (data.emg) {
-							if (Array.isArray(data.emg.rawBuffer) && data.emg.rawBuffer.length > 0) {
-								this.emg.rawBuffer = data.emg.rawBuffer.map((r: number) => round3(r));
-							}
-							if (data.emg.level !== undefined) this.emg.level = round3(data.emg.level);
-							if (data.emg.rms !== undefined) this.emg.rms = round3(data.emg.rms);
-							if (data.emg.mvcPercent !== undefined)
-								this.emg.mvcPercent = round3(data.emg.mvcPercent);
-							this.emg.isHighTension = data.emg.isHighTension;
-						}
-
-						if (data.emgRep) {
-							this.emgRep = { state: data.emgRep.state, count: data.emgRep.count };
-							if (workout.isSetRunning) {
-								workout.fsmState = data.emgRep.state === 'CONTRACT' ? 'PEAK' : 'START';
-							}
-						}
 
 						if (data.fsr) {
 							if (data.fsr.rawAdc !== undefined) this.fsr.rawAdc = data.fsr.rawAdc;
@@ -214,13 +203,6 @@ class TelemetryManager {
 					// Malformed button event -- ignore.
 				}
 			});
-			this.eventSource.addEventListener('emgRep', (e) => {
-				try {
-					this.onEmgRep(JSON.parse(e.data));
-				} catch {
-					// Malformed rep event -- ignore.
-				}
-			});
 			this.eventSource.onerror = () => {
 				this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
 				this.streamHz = 0;
@@ -231,6 +213,79 @@ class TelemetryManager {
 			console.warn('[Telemetry] SSE stream connect error', err);
 			this.connectionState = this.connectionState === 'connected' ? 'reconnecting' : 'error';
 			this.scheduleReconnect();
+		}
+	}
+
+	connectEmgSocket() {
+		if (typeof window === 'undefined') return;
+		if (this.emgReconnectTimer) {
+			clearTimeout(this.emgReconnectTimer);
+			this.emgReconnectTimer = null;
+		}
+		this.emgSocket?.close();
+		this.emgSocketState = 'connecting';
+
+		const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+		const socket = new WebSocket(`${scheme}://${location.host}/ws/emg`);
+		this.emgSocket = socket;
+
+		socket.onopen = () => {
+			this.emgSocketState = 'open';
+			this.emgReconnectDelayMs = 1000;
+		};
+		socket.onmessage = (e) => {
+			try {
+				this.onEmgMessage(JSON.parse(e.data));
+			} catch {
+				// Malformed frame -- ignore.
+			}
+		};
+		socket.onclose = () => {
+			if (this.emgSocket !== socket) return; // replaced by a newer connection
+			this.emgSocketState = 'closed';
+			const delay = this.emgReconnectDelayMs;
+			this.emgReconnectDelayMs = Math.min(delay * 2, this.RECONNECT_MAX_DELAY_MS);
+			this.emgReconnectTimer = setTimeout(() => this.connectEmgSocket(), delay);
+		};
+	}
+
+	private onEmgMessage(msg: any) {
+		if (msg.type === 'emgRep') {
+			this.onEmgRep(msg);
+			return;
+		}
+		if (msg.type === 'init') {
+			const buffer: number[] = msg.emg?.rawBuffer ?? [];
+			this.emg.rawBuffer = buffer.slice(-EMG_BUFFER_SIZE).map((r) => round3(r));
+			this.applyEmgValues(msg.emg ?? {}, msg.emgRep, msg.lastSeen);
+			return;
+		}
+		if (msg.type === 'emg') {
+			const samples: number[] = msg.samples ?? [];
+			if (samples.length > 0) {
+				this.emg.rawBuffer = [...this.emg.rawBuffer, ...samples.map((r) => round3(r))].slice(
+					-EMG_BUFFER_SIZE
+				);
+			}
+			this.applyEmgValues(msg, msg.emgRep, msg.lastSeen);
+		}
+	}
+
+	private applyEmgValues(
+		values: { level?: number; rms?: number; mvcPercent?: number; isHighTension?: boolean },
+		emgRep: { state: 'REST' | 'CONTRACT'; count: number } | undefined,
+		lastSeen: number | undefined
+	) {
+		if (values.level !== undefined) this.emg.level = round3(values.level);
+		if (values.rms !== undefined) this.emg.rms = round3(values.rms);
+		if (values.mvcPercent !== undefined) this.emg.mvcPercent = round3(values.mvcPercent);
+		if (values.isHighTension !== undefined) this.emg.isHighTension = values.isHighTension;
+		if (lastSeen) this.sensors.emg.lastSeen = lastSeen;
+		if (emgRep) {
+			this.emgRep = { state: emgRep.state, count: emgRep.count };
+			if (workout.isSetRunning) {
+				workout.fsmState = emgRep.state === 'CONTRACT' ? 'PEAK' : 'START';
+			}
 		}
 	}
 
