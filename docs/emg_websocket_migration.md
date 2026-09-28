@@ -39,10 +39,11 @@ flowchart LR
 ## รูปแบบข้อมูลบน `/ws/emg`
 
 **บอร์ด → เซิร์ฟเวอร์** (เชื่อมต่อด้วย `?role=device`): text frame เป็นค่า ADC ดิบ 0–4095 คั่นด้วยจุลภาค
-ปกติมี 2 ค่าต่อ frame เพราะ sample ทุก 10 ms แต่ส่งทุก 20 ms
+ปกติมี 2 ค่าต่อ frame เพราะ sample ทุก 10 ms แต่ส่งทุก 20 ms ต่อด้วย `|` และความเร็วยกสูงสุด (m/s) ในช่วงของ frame นั้น
+ความเร็วจึงอยู่บนเส้นเวลาเดียวกับ EMG และตัวนับ rep ใช้หาความเร็วของแต่ละ rep ได้ตรง frame ที่ไม่มีส่วน `|` (firmware เก่า) ยังรับได้
 
 ```
-2612,2618
+2612,2618|0.420
 ```
 
 **เซิร์ฟเวอร์ → เบราว์เซอร์** (เชื่อมต่อแบบไม่มี `role`): JSON 3 แบบ
@@ -50,8 +51,8 @@ flowchart LR
 | `type` | ส่งเมื่อ | เนื้อหา |
 |---|---|---|
 | `init` | ตอนเปิดการเชื่อมต่อ | `emg` (รวม `rawBuffer` 150 ค่า), `emgRep`, `lastSeen` |
-| `emg` | ทุก frame ที่บอร์ดส่งมา | `samples` (ค่าใหม่ หน่วย µV หลังลบ baseline), `level`, `rms`, `mvcPercent`, `isHighTension`, `emgRep`, `lastSeen` |
-| `emgRep` | ตัวตรวจจับนับได้ 1 rep | `count`, `peakPct`, `peakUv`, `durationMs`, `isStrong` |
+| `emg` | ทุก frame ที่บอร์ดส่งมา | `samples` (ค่าใหม่ หน่วย µV หลังลบ baseline), `level`, `rms`, `mvcPercent`, `isHighTension`, `highTensionMs` (เวลาใน frame ที่อยู่เหนือเกณฑ์ออกแรงจริง), `emgRep`, `lastSeen` |
+| `emgRep` | ตัวตรวจจับนับได้ 1 rep | `count`, `peakPct`, `peakUv`, `durationMs`, `isStrong`, `peakVelocity` (m/s หรือ `null` ถ้าบอร์ดไม่ได้ส่งความเร็ว) |
 
 เบราว์เซอร์ต่อ `samples` เข้า buffer ของตัวเองแล้วตัดให้เหลือ 150 ค่า เซิร์ฟเวอร์จึงไม่ต้องส่ง buffer ทั้งก้อนทุกครั้ง
 
