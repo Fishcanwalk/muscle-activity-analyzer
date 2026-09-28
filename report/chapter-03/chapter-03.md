@@ -6,7 +6,7 @@
 | ---------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Arduino Uno และ ESP32           | C/C++ บน Arduino framework                                            | อ่านเซนเซอร์ ประมวลผล และส่ง telemetry               |
 | Backend                            | Python, FastAPI, Pydantic, Motor                                        | API, authentication และการเข้าถึง MongoDB                         |
-| Frontend                           | TypeScript, SvelteKit                                                   | แดชบอร์ด API proxy SSE และ state การฝึก                       |
+| Frontend                           | TypeScript, SvelteKit, `ws`                                             | แดชบอร์ด API proxy WebSocket SSE และ state การฝึก             |
 | ฐานข้อมูล                 | MongoDB                                                                 | เก็บ telemetry ผลเซสชัน calibration และข้อมูลผู้ใช้ |
 | การพัฒนาในเครื่อง | Docker, Poetry, npm                                                     | เตรียม MongoDB ติดตั้ง dependency และรันบริการ        |
 
@@ -42,12 +42,13 @@ README ระบุสภาพแวดล้อมหลักเป็น Pyt
 
 - `uno_emg_fsr_link/uno_emg_fsr_link.ino` — อ่าน EMG/FSR ด้วย ADC และส่ง UART
 - `uno_emg_fsr_link/board_config.h` — กำหนดขาและช่วง ADC ของบอร์ด
-- `esp32_workout_firmware/esp32_workout_firmware.ino` — รวมข้อมูลเซนเซอร์ จัดการ task, ปุ่ม, จอ, buzzer, Wi-Fi และ HTTP
+- `esp32_workout_firmware/esp32_workout_firmware.ino` — รวมข้อมูลเซนเซอร์ จัดการ task, ปุ่ม, จอ, buzzer, Wi-Fi, HTTP และ WebSocket
 - `esp32_workout_firmware/board_config.h` — กำหนด mapping I2C/ADC แบบหลายสถาปัตยกรรม
 
 ### เว็บและ API
 
-- `frontend/src/routes/api/telemetry` — รับ telemetry และเปิด SSE
+- `frontend/src/routes/api/telemetry` — รับ telemetry ของเซนเซอร์อื่นและเปิด SSE
+- `frontend/emg-ws.js` และ `frontend/server.js` — WebSocket server ของ EMG ที่ `/ws/emg` และ entry point ตอน production
 - `frontend/src/lib/server/telemetryStore.ts` — เก็บสถานะสด แปลงค่า และส่งต่อ backend
 - `frontend/src/lib/workout/` — state ของ workout, telemetry, camera, recording และ calibration
 - `backend/app/routers/` — endpoint authentication, telemetry, sessions, calibration และ users
@@ -58,7 +59,7 @@ README ระบุสภาพแวดล้อมหลักเป็น Pyt
 
 การเชื่อมต่อเริ่มจาก UART ระหว่าง Uno กับ ESP32 โดย Uno ส่งข้อความหนึ่งบรรทัดต่อรอบอ่าน และ ESP32 อ่านจนพบ newline แล้ว parse เป็นจำนวนเต็มสองค่า จากนั้น ESP32 รวมกับข้อมูล I2C และสร้าง JSON telemetry
 
-Frontend route `/api/telemetry` รับ JSON และเรียก `ingestFullTelemetry()` เพื่ออัปเดตสถานะสด เมื่อมีข้อมูลใหม่จะ broadcast event `telemetry` ให้ browser และเรียก `forwardToBackend()` เพื่อส่งต่อไป FastAPI
+Frontend route `/api/telemetry` รับ JSON ของเซนเซอร์อื่นและเรียก `ingestFullTelemetry()` เพื่ออัปเดตสถานะสด เมื่อมีข้อมูลใหม่จะ broadcast event `telemetry` ให้ browser และเรียก `forwardToBackend()` เพื่อส่งต่อไป FastAPI ส่วน EMG เข้ามาทาง WebSocket `/ws/emg` แล้วเรียก `ingestEmg()` เพื่อแปลงหน่วย นับ rep และส่ง sample ใหม่ให้ browser ทาง WebSocket
 
 การปรับเทียบใช้ frontend route `/api/calibration` เป็น proxy ที่ตรวจสอบผู้ใช้ เรียก backend และอัปเดต cache ใน telemetry store ให้การแปลงหน่วยของข้อมูลสดใช้ค่าเดียวกับค่าที่บันทึกไว้ ส่วนผลเซตใช้ route ของ FastAPI ผ่าน client ที่สร้างใน frontend
 

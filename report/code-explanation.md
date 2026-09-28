@@ -24,7 +24,8 @@ ESP32
    ├── อ่าน MPU6050/MPU6500, MAX30102, MLX90614 ผ่าน I2C
    ├── รับปุ่ม A/B และควบคุม buzzer/LCD
    ├── รวมข้อมูลใน FreeRTOS tasks
-   └── ส่ง JSON ผ่าน HTTP POST
+   ├── ส่ง EMG ผ่าน WebSocket /ws/emg ทุก 20 ms
+   └── ส่ง JSON ของ sensor อื่นและปุ่มผ่าน HTTP POST ทุก 100 ms
 ```
 
 Uno ทำหน้าที่อ่าน EMG และ FSR ให้ได้จังหวะสม่ำเสมอที่ 100 Hz ส่วน ESP32 ทำหน้าที่รวมข้อมูลจาก Uno กับ sensor ของตัวเอง แล้วประมวลผลและส่งข้อมูลออกไป
@@ -157,6 +158,7 @@ ISR ไม่ได้อ่าน ADC และไม่ส่งข้อม�
 ไฟล์นี้ประกอบด้วยกลุ่มไลบรารีดังนี้
 
 - `WiFi.h` และ `HTTPClient.h` สำหรับเชื่อม Wi-Fi และส่ง HTTP
+- `WebSocketsClient.h` (library WebSockets by Markus Sattler) สำหรับส่ง EMG ผ่าน WebSocket
 - `Wire.h` สำหรับ I2C
 - `Adafruit_MLX90614.h` สำหรับอุณหภูมิ
 - `MAX30105.h` และ `heartRate.h` สำหรับ MAX30102 และตรวจ beat
@@ -173,29 +175,43 @@ ISR ไม่ได้อ่าน ADC และไม่ส่งข้อม�
 - Button A ใช้ GPIO32
 - Button B ใช้ GPIO33
 - ปุ่มเป็น active-low เพราะใช้ pull-up และถือว่ากดเมื่ออ่านได้ LOW
-- debounce ตั้งไว้ 250 ms
+- debounce ตั้งไว้ 250 ms และรอให้ขานิ่งอีก 30 ms (`BUTTON_SETTLE_MS`) ก่อนยืนยันการกด
 - buzzer ใช้ GPIO25
-- FSR ต่ำกว่า 300 ถือว่าแรงกำไม่พอ
-- FSR stability ต่ำกว่า 70% ถือว่าไม่นิ่ง
-- เงื่อนไขต้องค้าง 3 วินาทีก่อนเริ่มเตือน
-- buzzer สลับสถานะทุก 150 ms ขณะเตือน
+- แรงกำคิดเป็นเปอร์เซ็นต์จากค่า calibrate `fsrZero`..`fsrMax` ที่ได้จาก server ต้องมีช่วงห่างอย่างน้อย 100 ADC counts จึงถือว่า calibrate แล้ว
+- แรงกำเกิน 20% ถือว่าเริ่มกำ ถ้าตกต่ำกว่า 10% หรือต่ำกว่า 60% ของระดับที่เคยกำไว้นาน 200 ms ถือว่ากำหลุด และกลับมาเป็นปกติเมื่อกลับขึ้นถึง 75% ของระดับเดิม
+- FSR stability ต่ำกว่า 70% ถือว่าไม่นิ่ง และต้องค้าง 3 วินาทีก่อนเริ่มเตือน
+- buzzer สลับสถานะทุก 150 ms ขณะเตือน และเมื่อ server สั่งทดสอบจะดัง 3 ครั้ง
 
 #### LCD และ MPU
 
 LCD เป็นจอ 16x2 ที่ address `0x27` และใช้ I2C bus เดียวกับ sensor อื่น ส่วน MPU ใช้ address `0x68` และอ่าน register โดยตรง เพราะรองรับทั้ง WHO_AM_I `0x68` และ `0x70`
 
-การอ่าน acceleration ตั้งช่วง ±8g และนำค่าไปคำนวณ pitch, roll และ velocity แบบ leaky integration
+การอ่าน acceleration ตั้งช่วง ±8g และ gyro ±500 dps แล้วนำค่าไปประมาณทิศแรงโน้มถ่วงและคำนวณ velocity ตามแนวตั้งแบบ leaky integration
 
 #### UART และเวลา
 
 ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16, TX GPIO17 และ 9600 baud
+
+#### เซิร์ฟเวอร์
+
+ที่อยู่ของเซิร์ฟเวอร์กำหนดไว้จุดเดียวที่ `SERVER_HOST` และ `SERVER_PORT` ทั้ง URL ของ HTTP POST และ WebSocket สร้างจากสองค่านี้
+
+```cpp
+const char* SERVER_HOST = "172.30.81.83";
+const uint16_t SERVER_PORT = 5173;
+const String serverUrl = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
+const char* EMG_WS_PATH = "/ws/emg?role=device";
+```
+
+HTTP ตั้ง connect timeout 1500 ms และ read timeout 3000 ms ถ้า POST ล้มเหลวติดกัน 3 ครั้งจะพักส่ง 1 วินาที ส่วน WebSocket (`WebSocketsClient emgSocket`) จะพยายามต่อใหม่ทุก 2000 ms (`EMG_WS_RECONNECT_MS`)
 
 รอบเวลาหลักมีดังนี้
 
 | งาน | รอบ |
 |---|---:|
 | SensorTask | 10 ms หรือ 100 Hz |
-| NetworkTask | 250 ms หรือประมาณ 4 Hz |
+| EmgStreamTask | 20 ms หรือ 50 Hz |
+| NetworkTask | 100 ms หรือ 10 Hz |
 | LcdTask | 200 ms หรือ 5 Hz |
 | อ่าน MLX90614 | 250 ms |
 | debug log | 1 วินาที |
@@ -205,7 +221,7 @@ ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16
 
 #### MPU
 
-`velocity`, `mpuPitch`, `mpuRoll`, `mpuAx`, `mpuAy`, `mpuAz` เป็นค่าปัจจุบันของ MPU ส่วน `lastMpuMicros` ใช้คำนวณเวลาระหว่างตัวอย่างเพื่อ integrate acceleration เป็น velocity
+`velocity`, `mpuAx`, `mpuAy`, `mpuAz` เป็นค่าปัจจุบันของ MPU ส่วน `gravX`, `gravY`, `gravZ` และ `gravityRefMss` เก็บทิศและขนาดของแรงโน้มถ่วงที่ประมาณได้ `stillSinceMs` ใช้ reset velocity เมื่ออุปกรณ์นิ่ง และ `lastMpuMicros` ใช้คำนวณเวลาระหว่างตัวอย่างเพื่อ integrate acceleration เป็น velocity
 
 #### Uno link
 
@@ -233,8 +249,10 @@ ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16
 
 โครงสร้าง `SharedState` เป็นพื้นที่กลางของระบบ แบ่งข้อมูลเป็น 2 กลุ่ม
 
-1. **Sensor snapshot** — FSR, MPU, velocity, HR, SpO2 และอุณหภูมิ
-2. **Workout/button state** — สถานะ set, เวลาเริ่ม set/rest, จำนวน set, event ปุ่ม และเวลาที่มี activity ล่าสุด
+1. **Sensor snapshot** — FSR, FSR stability, velocity, peak velocity, HR, SpO2 และอุณหภูมิ
+2. **Workout/button state** — สถานะ set, เวลาเริ่ม set/rest, จำนวน set, event ปุ่ม, ค่า calibrate FSR (`fsrZeroCal`, `fsrMaxCal`), คำสั่งทดสอบ buzzer และเวลาที่มี activity ล่าสุด
+
+EMG ไม่ได้อยู่ใน `SharedState` แต่ส่งผ่าน `emgQueue` แยกต่างหาก
 
 การอ่านและเขียน `shared` ต้องผ่าน `stateMutex` เพื่อไม่ให้ task อ่านข้อมูลระหว่างที่อีก task กำลังเขียน
 
@@ -243,17 +261,17 @@ ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16
 | ตัวแปร | หน้าที่ |
 |---|---|
 | `i2cMutex` | ป้องกัน SensorTask กับ LcdTask ใช้ I2C พร้อมกัน |
-| `emgQueue` | ส่ง EMG sample จาก SensorTask ไป NetworkTask |
+| `emgQueue` | ส่ง EMG sample จาก SensorTask ไป EmgStreamTask (64 ช่อง) |
 | `buttonEventQueue` | ส่งรหัสปุ่มจาก ISR ไป ControlTask |
 | `sampleTickSemaphore` | hardware timer ให้สัญญาณปลุก SensorTask |
-| task handles | ใช้เพิ่ม/ลบ task จาก watchdog และอ้างอิง task ต่าง ๆ |
+| task handles | ใช้เพิ่ม/ลบ task จาก watchdog และอ้างอิง task ต่าง ๆ (`sensorTaskHandle`, `networkTaskHandle`, `lcdTaskHandle`, `controlTaskHandle`, `emgStreamTaskHandle`) |
 
 ### 3.5 `connectWiFi()`
 
 ฟังก์ชันนี้ตั้งค่า Wi-Fi ในโหมด station โดย
 
 1. disconnect การเชื่อมต่อเดิม
-2. เรียก `WiFi.mode(WIFI_STA)`
+2. เรียก `WiFi.mode(WIFI_STA)` ปิด Wi-Fi power save ด้วย `WiFi.setSleep(false)` และตั้งกำลังส่งเป็น 19.5 dBm
 3. เริ่มเชื่อมต่อด้วย `WiFi.begin()`
 4. ตรวจสถานะทุก 500 ms สูงสุด 40 ครั้ง
 5. พิมพ์ IP ถ้าเชื่อมต่อสำเร็จ
@@ -261,13 +279,33 @@ ESP32 รับข้อมูล Uno ผ่าน `Serial2` ที่ RX GPIO16
 
 ฟังก์ชันนี้ถูกเรียกทั้งตอน boot และหลังตื่นจาก light sleep
 
-### 3.6 `onSampleTimer()`
+### 3.6 `setupHttpClient()` และ `applyServerReply()`
+
+`setupHttpClient()` เตรียม `HTTPClient` สำหรับ POST ไป `/api/telemetry`
+
+```cpp
+void setupHttpClient() {
+  http.end();
+  http.begin(httpClient, serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setReuse(true);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  tcpNoDelaySet = false;
+}
+```
+
+ฟังก์ชันนี้ถูกเรียกตอน boot และทุกครั้งที่ POST ล้มเหลว การ reset `tcpNoDelaySet` ทำให้ `networkTask()` เปิด TCP_NODELAY ให้ connection ใหม่อีกครั้งหลัง POST สำเร็จครั้งแรก
+
+`applyServerReply()` อ่านคำตอบของ POST แบบค้นหาข้อความ ถ้ามีทั้ง `"fsrZero":` และ `"fsrMax":` จะเก็บลง `shared.fsrZeroCal` และ `shared.fsrMaxCal` ถ้ามี `"beep":true` จะตั้ง `shared.buzzerTestPending` ให้ `controlTask()` ดังเสียงทดสอบ ทั้งหมดทำภายใต้ `stateMutex`
+
+### 3.7 `onSampleTimer()`
 
 นี่คือ ISR ของ hardware timer โดยใช้ `xSemaphoreGiveFromISR()` ปล่อย `sampleTickSemaphore` ให้ SensorTask ทำงาน
 
 ISR ไม่ทำ I2C, HTTP, Serial หรือ delay เพราะงานเหล่านี้ใช้เวลานานและไม่เหมาะกับ interrupt context เมื่อ task ที่มี priority สูงกว่าถูกปลุก จะเรียก `portYIELD_FROM_ISR()`
 
-### 3.7 `buttonA_isr()` และ `buttonB_isr()`
+### 3.8 `buttonA_isr()` และ `buttonB_isr()`
 
 ISR ทั้งสองทำงานเหมือนกัน ต่างกันที่รหัสปุ่ม
 
@@ -278,7 +316,7 @@ ISR ทั้งสองทำงานเหมือนกัน ต่าง
 
 ISR ไม่เปลี่ยน workout state เอง แต่ส่งต่อให้ `controlTask()` ซึ่งเป็น task ปกติ
 
-### 3.8 `pollUnoLink()`
+### 3.9 `pollUnoLink()`
 
 ฟังก์ชันนี้อ่านข้อมูลจาก `Serial2` แบบ non-blocking
 
@@ -292,7 +330,7 @@ ISR ไม่เปลี่ยน workout state เอง แต่ส่งต
 
 ฟังก์ชันเก็บค่าล่าสุดไว้ แม้ลิงก์หลุด เพื่อไม่ให้ตัวแปร sensor กลายเป็นข้อมูลที่ไม่สมบูรณ์ทันที
 
-### 3.9 `mpuReadReg()`, `mpuWriteReg()`, `mpuBegin()` และ `mpuReadAccelMs2()`
+### 3.10 `mpuReadReg()`, `mpuWriteReg()`, `mpuBegin()`, `mpuReadMotion()` และ `updateMpu()`
 
 #### การอ่านและเขียน register
 
@@ -308,11 +346,20 @@ ISR ไม่เปลี่ยน workout state เอง แต่ส่งต
 
 ถ้า WHO_AM_I ไม่ตรงจะคืนค่า `false`
 
-#### `mpuReadAccelMs2()`
+#### `mpuReadMotion()`
 
-ฟังก์ชันนี้อ่าน acceleration 6 byte จาก register `ACCEL_XOUT_H` แล้วประกอบเป็น signed 16-bit ของแกน X, Y, Z จากนั้นแปลงเป็น m/s² ด้วยตัวหาร 4096 ซึ่งสอดคล้องกับช่วง ±8g ที่ตั้งไว้
+ฟังก์ชันนี้อ่าน 14 byte ต่อเนื่องจาก register `ACCEL_XOUT_H` (accel 3 แกน, อุณหภูมิ, gyro 3 แกน) แล้วประกอบเป็น signed 16-bit จากนั้นแปลง acceleration เป็น m/s² ด้วยตัวหาร 4096 ซึ่งสอดคล้องกับช่วง ±8g และแปลง gyro เป็น dps ด้วยตัวหาร 65.5 ซึ่งสอดคล้องกับช่วง ±500 dps
 
-### 3.10 `updateFsrStability()` และ `computeFsrStability()`
+#### `updateMpu()`
+
+1. เรียก `mpuReadMotion()` และหา `dt` จาก `micros()` ถ้า `dt` ผิดปกติจะใช้ 10 ms แทน
+2. ครั้งแรกใช้ acceleration ปัจจุบันเป็นทิศแรงโน้มถ่วงเริ่มต้น
+3. หมุนเวกเตอร์แรงโน้มถ่วงตาม gyro แล้วผสมกับ acceleration ด้วย complementary filter (`GRAVITY_FILTER_ALPHA` 0.98)
+4. เรียนรู้ขนาดแรงโน้มถ่วง `gravityRefMss` ช้า ๆ เมื่อหมุนน้อยกว่า 8 dps
+5. ฉาย acceleration ลงแนวแรงโน้มถ่วง ลบ `gravityRefMss` แล้ว integrate เป็น velocity พร้อม decay 0.998
+6. ถ้าอุปกรณ์นิ่งต่อเนื่อง 150 ms จะ reset velocity เป็น 0
+
+### 3.11 `updateFsrStability()` และ `computeFsrStability()`
 
 `updateFsrStability()` เขียนค่า FSR ลง rolling buffer 20 ตำแหน่งแล้วเลื่อน index แบบวนรอบ
 
@@ -324,7 +371,7 @@ stability = 100 - ((hi - lo) / 200) * 100
 
 จากนั้นบังคับผลลัพธ์ให้อยู่ระหว่าง 0 ถึง 100 หากข้อมูลยังมีน้อยกว่า 2 ค่า จะคืนค่า 100 เพื่อไม่แจ้งเตือนเร็วเกินไป
 
-### 3.11 `updateSpo2Window()`
+### 3.12 `updateSpo2Window()`
 
 ฟังก์ชันนี้เก็บค่า Red และ IR จนครบหน้าต่าง 200 ตัวอย่าง แล้วคำนวณ
 
@@ -336,19 +383,20 @@ stability = 100 - ((hi - lo) / 200) * 100
 
 หลังคำนวณแล้ว reset จำนวนตัวอย่างเพื่อเริ่มหน้าต่างใหม่
 
-### 3.12 `updateBuzzer()`
+### 3.13 `updateBuzzer()`
 
-ฟังก์ชันนี้เป็น state machine ขนาดเล็กสำหรับแจ้งเตือนแรงกำไม่พอหรือกำไม่นิ่ง
+ฟังก์ชันนี้เป็น state machine ขนาดเล็กสำหรับแจ้งเตือนเมื่อกำหลุดหรือกำไม่นิ่ง
 
-1. ใช้ hysteresis 50 counts เพื่อไม่ให้สถานะ low force สลับไปมาที่ threshold 300
-2. ตรวจ `fsrStability < 70`
-3. เปิดเงื่อนไขเตือนเฉพาะตอน `setActive == true`
-4. ถ้าเงื่อนไขหาย ให้ reset timer และปิด buzzer
-5. ถ้าเงื่อนไขค้าง 3 วินาที ให้ toggle buzzer ทุก 150 ms
+1. ถือว่า calibrate แล้วเมื่อ `fsrMax - fsrZero >= 100` และคำนวณ `gripPct` จากช่วงนี้
+2. ถ้าไม่มี set ทำงานหรือยังไม่ calibrate ให้ reset ระดับแรงกำและสถานะกำหลุด
+3. เมื่อ `gripPct > 20` จะจำระดับแรงกำสูงสุด (`gripLevel`) ที่ค่อย ๆ ลดลงด้วย decay 0.99
+4. ถ้าแรงกำต่ำกว่า 10% หรือต่ำกว่า 60% ของ `gripLevel` นาน 200 ms ถือว่ากำหลุด และกลับเป็นปกติเมื่อเกิน 10% และถึง 75% ของ `gripLevel` (hysteresis)
+5. ตรวจ `fsrStability < 70` ขณะกำอยู่ ถ้าค้าง 3 วินาทีถือว่ากำไม่นิ่ง
+6. ถ้าเงื่อนไขทั้งสองหาย ให้ปิด buzzer ถ้ามีข้อใดข้อหนึ่ง ให้ toggle buzzer ทุก 150 ms
 
 ฟังก์ชันรับค่า sensor เป็น parameter เพื่อให้ `ControlTask` เป็นผู้ส่ง snapshot ที่อ่านผ่าน mutex ไม่ต้องให้ฟังก์ชันนี้แตะ global sensor state โดยตรง
 
-### 3.13 `updateLcd()`
+### 3.14 `updateLcd()`
 
 ฟังก์ชันนี้คำนวณเวลาเป็นนาทีและวินาทีจากสถานะ set
 
@@ -359,32 +407,34 @@ stability = 100 - ((hi - lo) / 200) * 100
 
 ก่อนเขียน LCD จะ lock `i2cMutex` และเติมช่องว่างท้ายบรรทัดเพื่อไม่ให้ข้อความเก่าค้างบนจอ
 
-### 3.14 `initWatchdog()`
+### 3.15 `initWatchdog()`
 
 ฟังก์ชันนี้ใช้ `esp_task_wdt_config_t` ของ ESP32 Arduino Core 3 ตั้ง timeout เป็น millisecond (8 วินาที) และตั้ง `trigger_panic` ให้บอร์ดรีสตาร์ทเมื่อหมดเวลา โค้ดรองรับเฉพาะ Core 3 ขึ้นไป ถ้าคอมไพล์ด้วย Core ที่เก่ากว่าจะหยุดด้วย `#error`
 
 ถ้า watchdog ถูก initialize ไว้แล้วใน Core 3 จะเรียก `esp_task_wdt_reconfigure()` แทนการล้มเหลวทันที
 
-### 3.15 `enterLightSleepUntilWake()`
+task ที่ subscribe watchdog มี 5 ตัว ได้แก่ SensorTask, NetworkTask, LcdTask, ControlTask และ EmgStreamTask
+
+### 3.16 `enterLightSleepUntilWake()`
 
 ฟังก์ชันนี้ถูกเรียกเมื่อระบบ idle จริงเกิน 5 นาที โดยต้องไม่มี set ทำงานและไม่มี set ถูกเริ่มมาก่อนตามเงื่อนไขใน `controlTask()`
 
 ลำดับการทำงานคือ
 
 1. แสดงสถานะ sleeping บน LCD
-2. ตัด Wi-Fi
-3. เอา task ทั้งหมดออกจาก watchdog
+2. ตัด Wi-Fi และ reset `tcpNoDelaySet`
+3. เอา task ทั้ง 5 ตัว (รวม `emgStreamTaskHandle`) ออกจาก watchdog
 4. deinit watchdog เพื่อไม่ให้ timeout ระหว่าง sleep
 5. ตั้ง Button A เป็น wake source แบบ ext0 เมื่อกด LOW
 6. ตั้ง timer wake ทุก 5 วินาทีเพื่อไม่ให้นอนค้างถาวร
 7. เรียก `esp_light_sleep_start()`
 8. อ่านสาเหตุการตื่น
-9. สร้าง watchdog และ subscribe task กลับ
-10. เชื่อม Wi-Fi ใหม่
+9. สร้าง watchdog และ subscribe task ทั้ง 5 ตัวกลับ
+10. เชื่อม Wi-Fi ใหม่ (WebSocket ของ EMG จะต่อใหม่เองใน `emgStreamTask()` เมื่อ Wi-Fi กลับมา)
 
 Button B ไม่ได้ถูกตั้งเป็น wake source ในฟังก์ชันนี้ แต่ยังใช้งานได้ตามปกติเมื่อ ESP32 ตื่นอยู่
 
-### 3.16 `sensorTask()`
+### 3.17 `sensorTask()`
 
 `sensorTask()` เป็นงานหลักของการอ่านข้อมูล ทำงานบน core 1 และ priority 3
 
@@ -398,58 +448,96 @@ Button B ไม่ได้ถูกตั้งเป็น wake source ใน�
 6. ส่ง EMG เข้า `emgQueue` แบบไม่ block
 7. ถ้า queue เต็ม ให้ทิ้ง sample เก่าก่อนส่ง sample ใหม่
 8. lock I2C แล้วอ่าน MPU, MAX30102 และ MLX90614 ตามสถานะอุปกรณ์
-9. คำนวณ pitch, roll และ velocity จาก MPU
+9. คำนวณ velocity จาก MPU ด้วย `updateMpu()`
 10. ตรวจ beat และคำนวณ BPM จาก MAX30102
 11. อัปเดต SpO2 window จาก Red/IR
 12. อ่านอุณหภูมิ MLX เมื่อครบ interval
 13. เขียน snapshot ลง `shared` ภายใต้ `stateMutex`
 14. พิมพ์ consolidated debug log ทุก 1 วินาที
 
-การใช้ queue แบบไม่ block มีเป้าหมายไม่ให้การส่ง EMG ที่ค้างทำให้รอบอ่าน 100 Hz หยุด
+การใช้ queue แบบไม่ block มีเป้าหมายไม่ให้การส่ง EMG ที่ค้างทำให้รอบอ่าน 100 Hz หยุด ผู้ดึงข้อมูลจาก `emgQueue` คือ `emgStreamTask()`
 
-### 3.17 `networkTask()`
+### 3.18 `networkTask()`
 
-`networkTask()` ทำงานบน core 0 และ priority 2 ทุก 250 ms
+`networkTask()` ทำงานบน core 0 และ priority 2 ทุก 100 ms และส่งเฉพาะข้อมูลที่เปลี่ยนช้า (FSR, MPU, vitals และปุ่ม) ไม่ได้ส่ง EMG
 
 1. รอด้วย `vTaskDelayUntil()` เพื่อรักษาคาบเวลา
 2. reset watchdog
 3. ถ้า Wi-Fi ไม่ connected ให้ข้ามรอบ
-4. drain EMG samples จาก `emgQueue` มาเป็น JSON array
-5. lock `stateMutex` แล้ว copy `SharedState` เป็น snapshot
+4. ถ้า POST ล้มเหลวติดกันครบ 3 ครั้งและยังไม่พ้นช่วง backoff 1 วินาที ให้ข้ามรอบ
+5. lock `stateMutex` แล้ว copy `SharedState` เป็น snapshot และ reset `peakVelocity` เป็นค่า velocity ปัจจุบัน
 6. อ่าน flag ปุ่ม A/B แล้ว clear เป็น one-shot event
-7. สร้าง JSON ที่มี `board`, `emg`, `fsr`, `mpu`, `vitals` และ `buttons`
+7. สร้าง JSON ที่มี `board`, `fsr`, `mpu`, `vitals` และ `buttons`
 8. เรียก `http.POST(payload)`
-9. พิมพ์ HTTP code, จำนวน EMG ใน batch และเวลาที่ POST ใช้
-10. ถ้า HTTP error ให้พิมพ์ข้อความจาก `http.errorToString()`
+9. ถ้าได้ HTTP response (code > 0) ให้ reset ตัวนับความล้มเหลว เปิด TCP_NODELAY ด้วย `httpClient.setNoDelay(true)` ถ้ายังไม่เคยเปิดใน connection นี้ ส่งคำตอบให้ `applyServerReply()` แล้วพิมพ์ HTTP code และเวลาที่ POST ใช้
+10. ถ้า code <= 0 ให้พิมพ์ข้อความจาก `http.errorToString()` พร้อมข้อมูล Wi-Fi เรียก `setupHttpClient()` ใหม่ เริ่ม backoff เมื่อครบ 3 ครั้ง และคืน flag ปุ่มที่ส่งไม่สำเร็จกลับเข้า `shared`
 
-HTTP client ถูกสร้างและตั้ง reuse ใน `setup()` เพื่อไม่ต้องสร้าง TCP connection ใหม่ทุก packet
+payload ที่สร้างมีรูปแบบดังนี้
 
-### 3.18 `lcdTask()`
+```cpp
+snprintf(payload, sizeof(payload),
+         "{\"board\":\"esp32\","
+         "\"fsr\":{\"force\":%d,\"stability\":%.1f},"
+         "\"mpu\":{\"velocity\":%.3f,\"peakVelocity\":%.3f},"
+         "\"vitals\":{\"hr\":%d,\"spo2\":%.1f,\"skinTemp\":%.2f,\"deltaTemp\":%.2f},"
+         "\"buttons\":{\"a\":%s,\"b\":%s}}",
+         // ...
+```
+
+HTTP client ถูกสร้างและตั้ง reuse ใน `setupHttpClient()` เพื่อไม่ต้องสร้าง TCP connection ใหม่ทุก packet
+
+### 3.19 `emgStreamTask()`
+
+`emgStreamTask()` ทำงานบน core 0 และ priority 3 (stack 6144) ทุก 20 ms (`EMG_STREAM_INTERVAL_MS`) ทำหน้าที่ส่ง EMG ไปเซิร์ฟเวอร์ผ่าน WebSocket แยกจาก HTTP POST
+
+ตอนเริ่ม task จะตั้งค่า `emgSocket` ครั้งเดียว
+
+```cpp
+emgSocket.begin(SERVER_HOST, SERVER_PORT, EMG_WS_PATH);
+emgSocket.onEvent(onEmgSocketEvent);
+emgSocket.setReconnectInterval(EMG_WS_RECONNECT_MS);
+```
+
+`onEmgSocketEvent()` พิมพ์ `[EMG-WS] connected` หรือ `[EMG-WS] disconnected` เมื่อสถานะเปลี่ยน
+
+ในแต่ละรอบจะทำดังนี้
+
+1. รอด้วย `vTaskDelayUntil()` และ reset watchdog
+2. ถ้า Wi-Fi connected ให้เรียก `emgSocket.loop()` เพื่อให้ library จัดการการเชื่อมต่อและ reconnect
+3. drain sample ทั้งหมดใน `emgQueue` มาต่อเป็นข้อความคั่นด้วยจุลภาค เช่น `2612,2618` (ปกติ 2 ค่า เพราะ sample ทุก 10 ms แต่ส่งทุก 20 ms)
+4. ถ้ามี sample และ `emgSocket.isConnected()` ให้ส่งด้วย `emgSocket.sendTXT(frame, pos)`
+
+ถ้า WebSocket ยังไม่เชื่อมต่อ sample ที่ drain ออกมาในรอบนั้นจะถูกทิ้งและไม่ถูกส่งย้อนหลัง
+
+ฝั่งเซิร์ฟเวอร์ EMG จากบอร์ดถูกรับโดย `frontend/emg-ws.js` แล้วส่งต่อให้เบราว์เซอร์ผ่าน WebSocket `/ws/emg` ส่วน SSE ส่งเฉพาะ sensor อื่นและปุ่ม
+
+### 3.20 `lcdTask()`
 
 `lcdTask()` ทำงานบน core 1 และ priority 1 ซึ่งต่ำสุดในกลุ่ม task นี้ เพราะการพลาดการอัปเดตจอไม่สำคัญเท่าการพลาด sampling
 
 ทุก 200 ms task จะอ่าน `setActive`, `setStartMs`, `restStartMs` และ `setCount` ผ่าน `stateMutex` แล้วเรียก `updateLcd()`
 
-### 3.19 `controlTask()`
+### 3.21 `controlTask()`
 
 `controlTask()` เป็นเจ้าของการเปลี่ยนสถานะปุ่มและ workout state
 
 1. reset watchdog
-2. รอ event จาก `buttonEventQueue` สูงสุด 100 ms
-3. ถ้าได้ Button A ให้ toggle `setActive`
+2. ถ้าขาปุ่มกลับเป็น HIGH (ปล่อยปุ่ม) ให้ arm ปุ่มนั้นใหม่
+3. รอ event จาก `buttonEventQueue` สูงสุด 100 ms
+4. เมื่อได้ event ให้รอ 30 ms แล้วอ่านขาซ้ำ ถือเป็นการกดจริงเฉพาะเมื่อปุ่มถูก arm อยู่และขายังเป็น LOW จากนั้น disarm จนกว่าจะปล่อยปุ่ม
+5. ถ้าได้ Button A ให้ toggle `setActive`
    - จากพักเป็นทำงาน: บันทึกเวลาเริ่มและเพิ่ม `setCount`
    - จากทำงานเป็นพัก: บันทึก `restStartMs`
    - set `buttonAEventPending`
-4. ถ้าได้ Button B ให้หยุด set, reset rest state/rep count/set count และ set `buttonBEventPending`
-5. อัปเดต `lastActivityMs`
-6. อ่าน FSR และ set state จาก `shared`
-7. เรียก `updateBuzzer()`
-8. ถ้า idle ครบ 5 นาที เรียก `enterLightSleepUntilWake()`
-9. หลังตื่น reset idle clock เพื่อไม่ให้ timer wake ทำให้กลับเข้า sleep ทันที
+6. ถ้าได้ Button B ให้หยุด set, บันทึก `restStartMs`, reset set count และ set `buttonBEventPending`
+7. อัปเดต `lastActivityMs`
+8. อ่าน FSR, stability, set state, ค่า calibrate และคำสั่งทดสอบ buzzer จาก `shared`
+9. ถ้ามีคำสั่งทดสอบจาก server ให้ดัง buzzer 3 ครั้ง
+10. เรียก `updateBuzzer()`
+11. ถ้า idle ครบ 5 นาที เรียก `enterLightSleepUntilWake()`
+12. หลังตื่น reset idle clock เพื่อไม่ให้ timer wake ทำให้กลับเข้า sleep ทันที
 
-ตัวแปร `repCount` ใน `SharedState` เป็น counter ที่แสดงความตั้งใจไว้สำหรับ LCD แต่ในไฟล์นี้ยังไม่มีโค้ดเพิ่มค่าดังกล่าว
-
-### 3.20 `setup()` ของ ESP32
+### 3.22 `setup()` ของ ESP32
 
 `setup()` เป็นจุดเริ่มต้นที่เตรียม hardware, communication และ RTOS
 
@@ -457,7 +545,7 @@ HTTP client ถูกสร้างและตั้ง reuse ใน `setup()`
 
 - เปิด Serial ที่ 115200
 - delay 100 ms ให้ UART settle
-- ตั้ง buzzer เป็น output และปิดเสียง
+- ตั้ง buzzer เป็น output และดัง 2 ครั้งเพื่อบอกว่าบอร์ดเริ่มทำงาน
 - เริ่ม `Serial2` สำหรับ Uno
 
 #### ขั้นที่ 2: I2C และ LCD
@@ -481,9 +569,8 @@ HTTP client ถูกสร้างและตั้ง reuse ใน `setup()`
 
 - พิมพ์ free heap ก่อนเชื่อมต่อ
 - เรียก `connectWiFi()`
-- เรียก `http.begin(httpClient, serverUrl)`
-- ตั้ง `Content-Type: application/json`
-- เปิด connection reuse
+- เรียก `setupHttpClient()` ซึ่งเรียก `http.begin(httpClient, serverUrl)`, ตั้ง `Content-Type: application/json`, เปิด connection reuse และตั้ง timeout
+- WebSocket ของ EMG ยังไม่ถูกเปิดที่นี่ แต่เปิดใน `emgStreamTask()`
 
 #### ขั้นที่ 5: RTOS primitives
 
@@ -503,18 +590,24 @@ HTTP client ถูกสร้างและตั้ง reuse ใน `setup()`
 
 #### ขั้นที่ 7: Hardware timer
 
-โค้ดมี conditional compile รองรับ timer API ของ Arduino Core 2 และ Core 3
+โค้ดใช้ timer API ของ Arduino Core 3 เท่านั้น
 
-- Core 3 ใช้ timer tick 1 MHz แล้วตั้ง alarm ที่ 10,000 microseconds
-- Core 2 ใช้ timer divider 80 แล้วตั้ง alarm 10,000 microseconds
-
-ทั้งสองแบบผูก timer เข้ากับ `onSampleTimer()` และตั้งเป็น auto-reload
+- `timerBegin(1000000)` ให้ timer tick 1 MHz แล้วตั้ง alarm ที่ 10,000 microseconds
+- ผูก timer เข้ากับ `onSampleTimer()` ตั้งเป็น auto-reload แล้วเรียก `timerStart()`
 
 #### ขั้นที่ 8: สร้าง task และ subscribe watchdog
 
-สร้าง task 4 ตัวด้วย `xTaskCreatePinnedToCore()` แล้วเพิ่ม task handle ทั้งหมดเข้า watchdog
+สร้าง task 5 ตัวด้วย `xTaskCreatePinnedToCore()` แล้วเพิ่ม task handle ทั้งหมดเข้า watchdog
 
-### 3.21 `loop()` ของ ESP32
+```cpp
+xTaskCreatePinnedToCore(sensorTask, "SensorTask", 4096, nullptr, 3, &sensorTaskHandle, 1);
+xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, nullptr, 2, &networkTaskHandle, 0);
+xTaskCreatePinnedToCore(lcdTask, "LcdTask", 2560, nullptr, 1, &lcdTaskHandle, 1);
+xTaskCreatePinnedToCore(controlTask, "ControlTask", 2560, nullptr, 2, &controlTaskHandle, 1);
+xTaskCreatePinnedToCore(emgStreamTask, "EmgStreamTask", 6144, nullptr, 3, &emgStreamTaskHandle, 0);
+```
+
+### 3.23 `loop()` ของ ESP32
 
 หลัง `setup()` สร้าง task ครบแล้ว `loop()` ไม่ต้องทำงานอีก จึงเรียก
 
@@ -526,7 +619,7 @@ vTaskDelete(NULL);
 
 ---
 
-## 4. ลำดับข้อมูลตั้งแต่ Uno ถึง HTTP
+## 4. ลำดับข้อมูลตั้งแต่ Uno ถึง WebSocket/HTTP
 
 ```text
 Timer1 Compare Match ของ Uno
@@ -545,14 +638,18 @@ SensorTask อัปเดต queue และ SharedState
         │
         ├── MPU / MAX30102 / MLX90614 ผ่าน I2C
         │
-        ▼
-NetworkTask รวม JSON ทุก 250 ms
+        ├── emgQueue ──► EmgStreamTask ทุก 20 ms
+        │                  │
+        │                  ▼
+        │               emgSocket.sendTXT("2612,2618")  → WebSocket /ws/emg
         │
-        ▼
-HTTPClient.POST(payload)
+        └── SharedState ──► NetworkTask รวม JSON ทุก 100 ms
+                              │
+                              ▼
+                           HTTPClient.POST(payload)  → /api/telemetry
 ```
 
-การแบ่งรอบแบบนี้ทำให้ sampling ของ Uno และ SensorTask เป็นงานที่มีจังหวะชัดเจน ขณะที่ HTTP ทำงานเป็นอีก task หนึ่งและไม่บล็อกการอ่าน sensor โดยตรง
+การแบ่งรอบแบบนี้ทำให้ sampling ของ Uno และ SensorTask เป็นงานที่มีจังหวะชัดเจน ขณะที่ WebSocket และ HTTP ทำงานเป็น task แยกกันและไม่บล็อกการอ่าน sensor โดยตรง EMG จึงไม่ต้องรอ POST ของ sensor อื่น
 
 ---
 
@@ -575,21 +672,26 @@ HTTPClient.POST(payload)
 | ฟังก์ชัน | หน้าที่ |
 |---|---|
 | `connectWiFi()` | เชื่อม Wi-Fi และ retry |
+| `setupHttpClient()` | เตรียม HTTP client, header, reuse, timeout และ reset `tcpNoDelaySet` |
+| `applyServerReply()` | อ่าน `fsrZero`/`fsrMax`/`beep` จากคำตอบของ POST |
 | `onSampleTimer()` | ปลุก SensorTask ด้วย semaphore |
 | `buttonA_isr()` / `buttonB_isr()` | debounce และส่ง event ปุ่มเข้า queue |
 | `pollUnoLink()` | parse ข้อมูล UART จาก Uno |
 | `mpuReadReg()` / `mpuWriteReg()` | อ่าน/เขียน register ของ MPU |
 | `mpuBegin()` | ตรวจ WHO_AM_I และตั้งค่า MPU |
-| `mpuReadAccelMs2()` | อ่าน acceleration 3 แกนและแปลงหน่วย |
+| `mpuReadMotion()` | อ่าน acceleration และ gyro 3 แกนและแปลงหน่วย |
+| `updateMpu()` | ประมาณทิศแรงโน้มถ่วงและคำนวณ velocity |
 | `updateFsrStability()` | เพิ่มค่าเข้า rolling window |
 | `computeFsrStability()` | คำนวณเปอร์เซ็นต์ความนิ่ง |
 | `updateSpo2Window()` | คำนวณ SpO2 จากช่วง Red/IR |
 | `updateBuzzer()` | ตรวจแรงกำ/ความนิ่งและควบคุมเสียงเตือน |
 | `updateLcd()` | แสดงสถานะ set และเวลา |
-| `initWatchdog()` | ตั้ง watchdog ให้รองรับ Core หลายรุ่น |
+| `initWatchdog()` | ตั้ง watchdog 8 วินาทีด้วย API ของ Core 3 |
 | `enterLightSleepUntilWake()` | ปิดงานที่ไม่ควรทำระหว่าง sleep และตั้ง wake source |
 | `sensorTask()` | อ่านและประมวลผล sensor ทุก 10 ms |
-| `networkTask()` | รวมข้อมูลและ POST ทุก 250 ms |
+| `networkTask()` | รวมข้อมูล sensor อื่นและปุ่มแล้ว POST ทุก 100 ms |
+| `onEmgSocketEvent()` | log สถานะการเชื่อมต่อ WebSocket |
+| `emgStreamTask()` | drain `emgQueue` แล้วส่ง EMG ผ่าน WebSocket ทุก 20 ms |
 | `lcdTask()` | อัปเดต LCD ทุก 200 ms |
 | `controlTask()` | จัดการปุ่ม, set state, buzzer และ light sleep |
 | `setup()` | เตรียม hardware, sensor, Wi-Fi, timer, queue และ task |
@@ -604,16 +706,17 @@ HTTPClient.POST(payload)
 3. การแก้ `SharedState` ต้องรักษาการใช้ `stateMutex` ให้ครบทั้งฝั่งอ่านและเขียน
 4. I2C ถูกใช้ทั้ง SensorTask และ LcdTask จึงต้อง lock `i2cMutex`
 5. `emgQueue` ถูกออกแบบให้ไม่ block SensorTask หากแก้เป็นการรอคิว อาจทำให้ sampling หยุด
-6. การเปลี่ยนรอบเวลา sampling ต้องพิจารณาทั้ง hardware timer, queue size และจำนวนข้อมูลใน JSON
-7. การเปลี่ยน threshold ของ FSR ต้องพิจารณา hysteresis และเวลา delay ก่อนเตือนพร้อมกัน
-8. การแก้โครงสร้าง JSON ต้องแก้ทั้งฝั่งสร้าง payload และฝั่งที่รับข้อมูลให้สอดคล้องกัน
-9. ค่า SpO2 และ velocity เป็นค่าที่คำนวณโดยประมาณตาม algorithm ในไฟล์ ไม่ใช่ค่าที่ผ่านการสอบเทียบทางห้องปฏิบัติการ
-10. ค่า Wi-Fi และ URL ถูกกำหนดเป็นค่าคงที่ใน source code จึงควรระวังการเผยแพร่ไฟล์ที่มีข้อมูลการเชื่อมต่อจริง
+6. การเปลี่ยนรอบเวลา sampling ต้องพิจารณาทั้ง hardware timer, queue size (64 ช่อง) และรอบส่งของ EmgStreamTask
+7. ระหว่างที่ WebSocket หลุด sample EMG ที่ drain ออกจากคิวจะถูกทิ้งและไม่ส่งย้อนหลัง
+8. การเปลี่ยน threshold ของ FSR ต้องพิจารณา hysteresis และเวลา delay ก่อนเตือนพร้อมกัน
+9. การแก้โครงสร้าง JSON ต้องแก้ทั้งฝั่งสร้าง payload และฝั่งที่รับข้อมูลให้สอดคล้องกัน
+10. ค่า SpO2 และ velocity เป็นค่าที่คำนวณโดยประมาณตาม algorithm ในไฟล์ ไม่ใช่ค่าที่ผ่านการสอบเทียบทางห้องปฏิบัติการ
+11. ค่า Wi-Fi และ URL ถูกกำหนดเป็นค่าคงที่ใน source code จึงควรระวังการเผยแพร่ไฟล์ที่มีข้อมูลการเชื่อมต่อจริง
 
 ---
 
 ## 7. สรุปสั้น ๆ
 
-`uno_emg_fsr_link.ino` เป็น firmware สำหรับอ่าน EMG/FSR แบบจับจังหวะด้วย Timer1 และ ADC interrupt แล้วส่งค่าทาง UART ส่วน `esp32_workout_firmware.ino` เป็น firmware หลักที่รับข้อมูลนั้น รวมกับ sensor I2C จัดการปุ่ม LCD buzzer watchdog และ power saving ผ่าน FreeRTOS tasks ก่อนส่ง telemetry ด้วย HTTP
+`uno_emg_fsr_link.ino` เป็น firmware สำหรับอ่าน EMG/FSR แบบจับจังหวะด้วย Timer1 และ ADC interrupt แล้วส่งค่าทาง UART ส่วน `esp32_workout_firmware.ino` เป็น firmware หลักที่รับข้อมูลนั้น รวมกับ sensor I2C จัดการปุ่ม LCD buzzer watchdog และ power saving ผ่าน FreeRTOS tasks 5 ตัว ก่อนส่ง EMG ด้วย WebSocket และส่ง telemetry ของ sensor อื่นด้วย HTTP
 
 แกนหลักของการออกแบบคือการแยกงานตามความเร่งด่วน: interrupt ใช้แจ้งเหตุการณ์, task ใช้ทำงานจริง, queue/semaphore ใช้ส่งสัญญาณระหว่างส่วนต่าง ๆ และ mutex ใช้ป้องกัน resource ที่ใช้ร่วมกัน
