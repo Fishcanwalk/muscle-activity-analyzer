@@ -59,7 +59,10 @@ README ระบุสภาพแวดล้อมหลักเป็น Pyt
 
 การเชื่อมต่อเริ่มจาก UART ระหว่าง Uno กับ ESP32 โดย Uno ส่งข้อความหนึ่งบรรทัดต่อรอบอ่าน และ ESP32 อ่านจนพบ newline แล้ว parse เป็นจำนวนเต็มสองค่า จากนั้น ESP32 รวมกับข้อมูล I2C และสร้าง JSON telemetry
 
-Frontend route `/api/telemetry` รับ JSON ของเซนเซอร์อื่นและเรียก `ingestFullTelemetry()` เพื่ออัปเดตสถานะสด เมื่อมีข้อมูลใหม่จะ broadcast event `telemetry` ให้ browser และเรียก `forwardToBackend()` เพื่อส่งต่อไป FastAPI ส่วน EMG เข้ามาทาง WebSocket `/ws/emg` แล้วเรียก `ingestEmg()` เพื่อแปลงหน่วย นับ rep และส่ง sample ใหม่ให้ browser ทาง WebSocket
+เว็บเซิร์ฟเวอร์รับข้อมูลจาก ESP32 เป็น 2 ช่องทาง
+
+- **เซนเซอร์อื่นและปุ่ม:** เข้ามาที่ `/api/telemetry` เป็น JSON ฟังก์ชัน `ingestFullTelemetry()` จะอัปเดตค่าล่าสุดของเซนเซอร์ แล้วส่งค่าใหม่ไปให้ browser ผ่าน SSE และส่งต่อไปเก็บที่ FastAPI ด้วย `forwardToBackend()`
+- **EMG:** เข้ามาทาง WebSocket `/ws/emg` ฟังก์ชัน `ingestEmg()` จะแปลงค่า ADC ที่ได้เป็นหน่วย µV และตรวจว่าผู้ใช้ยกครบ 1 ครั้ง (rep) หรือยัง จากนั้นส่งเฉพาะค่า EMG ชุดที่เพิ่งได้รับไปให้ browser ผ่าน WebSocket เพื่อวาดกราฟต่อจากค่าเดิม
 
 การปรับเทียบใช้ frontend route `/api/calibration` เป็น proxy ที่ตรวจสอบผู้ใช้ เรียก backend และอัปเดต cache ใน telemetry store ให้การแปลงหน่วยของข้อมูลสดใช้ค่าเดียวกับค่าที่บันทึกไว้ ส่วนผลเซตใช้ route ของ FastAPI ผ่าน client ที่สร้างใน frontend
 

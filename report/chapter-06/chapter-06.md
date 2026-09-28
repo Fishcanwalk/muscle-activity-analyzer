@@ -340,7 +340,7 @@ buttonEventQueue = xQueueCreate(8, sizeof(uint8_t));
 | `stateMutex`          | Mutex             | กุญแจของข้อมูลกลาง`SharedState` ไม่ให้ task หนึ่งอ่านขณะที่อีก task กำลังเขียน |
 | `i2cMutex`            | Mutex             | กุญแจของ I2C bus ให้ใช้ได้ทีละ task                                                                             |
 | `sampleTickSemaphore` | Binary semaphore  | สัญญาณจาก hardware timer ที่ปลุก SensorTask ทุก 10 ms                                                             |
-| `emgQueue`            | Queue 64 ช่อง | ที่พักค่า EMG ทุกตัวอย่าง รอ EmgStreamTask มาเก็บไปส่งเป็นชุด                                  |
+| `emgQueue`            | Queue 64 ช่อง | ที่พักค่า EMG ทุกตัวอย่าง รอ EmgStreamTask มาเก็บไปส่งเป็นชุด                                |
 | `buttonEventQueue`    | Queue 8 ช่อง  | ส่งหมายเลขปุ่มที่ถูกกดจาก interrupt ไปให้ ControlTask                                                  |
 
 #### 6.3.2.2 การแบ่งงานเป็น Task
@@ -357,13 +357,13 @@ xTaskCreatePinnedToCore(emgStreamTask, "EmgStreamTask", 6144, nullptr, 3, &emgSt
 
 ดูโค้ดต้นฉบับ: [`esp32_workout_firmware.ino` บรรทัด 994–998](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/test-sensor/arduino/esp32_workout_firmware/esp32_workout_firmware.ino#L994-L998)
 
-| Task            | Stack (byte) | Priority         | Core | หน้าที่                                                                  |
-| --------------- | ------------ | ---------------- | ---- | ------------------------------------------------------------------------------- |
-| `SensorTask`  | 4096         | 3 (สูงสุด) | 1    | อ่านเซนเซอร์ทุก 10 ms ตาม hardware timer                      |
-| `EmgStreamTask` | 6144       | 3                | 0    | ส่งค่า EMG ผ่าน WebSocket ทุก 20 ms                               |
-| `NetworkTask` | 8192         | 2                | 0    | สร้าง JSON ของเซนเซอร์อื่นและส่ง HTTP POST ทุก 100 ms             |
-| `LcdTask`     | 2560         | 1 (ต่ำสุด) | 1    | อัปเดตจอ LCD ทุก 200 ms                                              |
-| `ControlTask` | 2560         | 2                | 1    | รับเหตุการณ์ปุ่ม ควบคุม buzzer และเข้า light sleep |
+| Task              | Stack (byte) | Priority         | Core | หน้าที่                                                                     |
+| ----------------- | ------------ | ---------------- | ---- | ---------------------------------------------------------------------------------- |
+| `SensorTask`    | 4096         | 3 (สูงสุด) | 1    | อ่านเซนเซอร์ทุก 10 ms ตาม hardware timer                         |
+| `EmgStreamTask` | 6144         | 3                | 0    | ส่งค่า EMG ผ่าน WebSocket ทุก 20 ms                                   |
+| `NetworkTask`   | 8192         | 2                | 0    | สร้าง JSON ของเซนเซอร์อื่นและส่ง HTTP POST ทุก 100 ms |
+| `LcdTask`       | 2560         | 1 (ต่ำสุด) | 1    | อัปเดตจอ LCD ทุก 200 ms                                                 |
+| `ControlTask`   | 2560         | 2                | 1    | รับเหตุการณ์ปุ่ม ควบคุม buzzer และเข้า light sleep    |
 
 SensorTask ได้ priority สูงสุด เมื่อถึงรอบอ่านเซนเซอร์ FreeRTOS จะหยุด task อื่นบน core เดียวกันไว้ก่อนแล้วให้ SensorTask ทำงานทันที ส่วน LcdTask ได้ priority ต่ำสุด เพราะถ้าจออัปเดตช้าไปเล็กน้อยผู้ใช้ก็แทบไม่สังเกตเห็น EmgStreamTask ได้ priority สูงกว่า NetworkTask เพราะอยู่ core เดียวกัน ถ้า NetworkTask กำลังสร้าง JSON หรือรอคำตอบของ POST อยู่ EmgStreamTask จะแทรกเข้าไปส่ง EMG ได้ทันที กราฟ EMG บนเว็บจึงไม่สะดุดตามการรอ HTTP
 
@@ -666,10 +666,10 @@ watchdog ติดตามแยกเป็นราย task ทุก task �
 
 ข้อมูลจากบอร์ดแบ่งส่งเป็น 2 ช่องทางตามลักษณะของข้อมูล
 
-| ช่องทาง | Task | รอบส่ง | ข้อมูล |
-| --- | --- | --- | --- |
-| WebSocket `/ws/emg?role=device` | `EmgStreamTask` | 20 ms | ค่า EMG ดิบทุกตัวอย่าง |
-| HTTP `POST /api/telemetry` | `NetworkTask` | 100 ms | FSR, MPU, ชีพจร, อุณหภูมิ และเหตุการณ์กดปุ่ม |
+| ช่องทาง                   | Task              | รอบส่ง | ข้อมูล                                                                |
+| -------------------------------- | ----------------- | ------------ | --------------------------------------------------------------------------- |
+| WebSocket`/ws/emg?role=device` | `EmgStreamTask` | 20 ms        | ค่า EMG ดิบทุกตัวอย่าง                                     |
+| HTTP`POST /api/telemetry`      | `NetworkTask`   | 100 ms       | FSR, MPU, ชีพจร, อุณหภูมิ และเหตุการณ์กดปุ่ม |
 
 EMG เปลี่ยนเร็วและหน้าเว็บต้องวาดกราฟให้ต่อเนื่อง ถ้าส่งด้วย HTTP ทุกครั้งต้องมี header ซ้ำและต้องรอคำตอบก่อนส่งรอบถัดไป ส่วน WebSocket เปิดการเชื่อมต่อค้างไว้ครั้งเดียวแล้วส่งข้อความต่อเนื่องได้ทันทีโดยไม่ต้องรอคำตอบ overhead ต่อข้อความจึงต่ำกว่ามาก ส่วนเซนเซอร์อื่นเปลี่ยนช้ากว่า และคำตอบของ POST ใช้ส่งคำสั่งจากเว็บกลับมาที่บอร์ดอยู่แล้ว จึงยังใช้ HTTP ต่อ
 
@@ -936,6 +936,189 @@ browser ต่อ sample ใหม่เข้า buffer ของตัวเ�
 - `telemetry_samples`: ข้อมูลเซนเซอร์ระหว่างบันทึก ลบอัตโนมัติเมื่อครบ 90 วัน
 - `session_results`: ผลสรุปของแต่ละ session การฝึก
 - `calibrations`: ค่า calibrate ล่าสุดของผู้ใช้แต่ละคน (1 รายการต่อผู้ใช้)
+
+### 6.4.2 โค้ดและการทำงานของโค้ด
+
+หัวข้อนี้แสดงโค้ดฝั่งเว็บเซิร์ฟเวอร์ที่รับค่าจาก ESP32 ทั้ง 2 ช่องทาง โค้ดยกมาจากโฟลเดอร์ `frontend/` โดยตรง บรรทัดที่ละไว้แสดงด้วย `// ...`
+
+#### 6.4.2.1 การเปิดช่องทาง WebSocket บนเว็บเซิร์ฟเวอร์
+
+route ปกติของ SvelteKit รับได้เฉพาะ HTTP ตอน production จึงใช้ไฟล์ `server.js` สร้าง http server เอง แล้วให้ server ตัวเดียวกันนี้ทำงานทั้ง 2 อย่าง คือส่ง request ปกติให้ SvelteKit และรับการเชื่อมต่อ WebSocket
+
+```js
+const server = createServer(handler);
+server.on('connection', (socket) => socket.setNoDelay(true));
+attachEmgWebSocket(server);
+```
+
+ดูโค้ดต้นฉบับ: [`server.js` บรรทัด 10–14](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/server.js#L10-L14)
+
+`handler` คือตัวจัดการ request ของ SvelteKit ตัวเดิม ส่วน `attachEmgWebSocket()` มาจากไฟล์ `emg-ws.js` ตอนพัฒนา (`pnpm dev`) plugin ใน `vite.config.ts` เรียกฟังก์ชันเดียวกันนี้กับ dev server แทน
+
+การเชื่อมต่อ WebSocket เริ่มจาก browser หรือบอร์ดส่ง HTTP request พิเศษมาขอเปลี่ยนเป็น WebSocket (upgrade) `emg-ws.js` จึงดักเหตุการณ์ `upgrade` ของ http server ไว้
+
+```js
+httpServer.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.pathname !== PATH) return;
+  /** @type {import('node:net').Socket} */ (socket).setNoDelay(true);
+  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, url));
+});
+
+async function onConnection(ws, url) {
+  // ...
+  if (url.searchParams.get('role') === 'device') handleDevice(ws);
+  else handleViewer(ws);
+}
+```
+
+ดูโค้ดต้นฉบับ: [`emg-ws.js` บรรทัด 39–60](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/emg-ws.js#L39-L60)
+
+1. รับเฉพาะ request ที่ขอมาที่ `/ws/emg` ส่วน request อื่น เช่น WebSocket ของ Vite ที่ใช้รีโหลดหน้าเว็บตอนพัฒนา จะปล่อยให้ส่วนอื่นจัดการ
+2. ปิดการรอรวม packet (`setNoDelay`) เพื่อให้ข้อมูลขนาดเล็กถูกส่งออกทันที
+3. เมื่อเชื่อมต่อสำเร็จ จะดูพารามิเตอร์ `role` ถ้าเป็น `device` แปลว่าเป็นบอร์ด ESP32 ที่จะส่ง EMG เข้ามา (`handleDevice`) ถ้าไม่มีแปลว่าเป็น browser ที่จะรอรับ EMG ไปแสดงผล (`handleViewer`)
+
+#### 6.4.2.2 การรับค่า EMG จาก ESP32 ผ่าน WebSocket
+
+เมื่อบอร์ดส่งข้อความเข้ามา เช่น `2612,2618` ฟังก์ชัน `handleDevice()` จะแยกข้อความเป็นตัวเลข
+
+```js
+function handleDevice(ws) {
+  ws.on('message', (data) => {
+    const raws = String(data).split(',').map(Number).filter(Number.isFinite);
+    if (raws.length > 0) bridge()?.ingestEmg(raws);
+  });
+}
+```
+
+ดูโค้ดต้นฉบับ: [`emg-ws.js` บรรทัด 78–83](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/emg-ws.js#L78-L83)
+
+ข้อความถูกตัดตรงเครื่องหมายจุลภาคแล้วแปลงเป็นตัวเลข ค่าที่แปลงไม่ได้จะถูกทิ้ง ถ้าเหลือค่าอย่างน้อย 1 ค่าจึงส่งต่อให้ `ingestEmg()` ใน `telemetryStore.ts` ซึ่งเป็นที่เก็บสถานะสดของระบบ `emg-ws.js` อยู่นอกระบบ module ของ SvelteKit จึงเรียก `telemetryStore.ts` ผ่าน `bridge()` ซึ่งอ่านค่าจาก `globalThis.__cyberpumpEmg` แทนการ import
+
+`ingestEmg()` แปลงค่าทั้งชุด แล้วส่งผลให้ browser ที่เชื่อมต่ออยู่
+
+```ts
+ingestEmg(raws: number[]) {
+  const now = Date.now();
+  const samples = this.ingestEmgSamples(raws, now);
+  this.state.sensors.emg.lastSeen = now;
+  const { level, rms, mvcPercent, isHighTension } = this.state.emg;
+  this.broadcast('emgStream', {
+    samples,
+    level,
+    rms,
+    mvcPercent,
+    isHighTension,
+    emgRep: this.state.emgRep,
+    lastSeen: now
+  });
+}
+```
+
+ดูโค้ดต้นฉบับ: [`telemetryStore.ts` บรรทัด 184–198](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/src/lib/server/telemetryStore.ts#L184-L198)
+
+- `lastSeen` บันทึกเวลาที่ได้รับ EMG ล่าสุด หน้าเว็บใช้ค่านี้บอกว่าเซนเซอร์ EMG ยังส่งข้อมูลอยู่หรือไม่
+- `broadcast('emgStream', ...)` ส่ง event ภายในเซิร์ฟเวอร์ `handleViewer()` ใน `emg-ws.js` รับ event นี้แล้วส่งต่อให้ browser ทุกเครื่องเป็นข้อความ `type: "emg"` โดยส่งเฉพาะค่า EMG ชุดที่เพิ่งได้รับ (`samples`) ไม่ได้ส่งกราฟทั้งหมด
+
+การแปลงค่าแต่ละตัวอยู่ใน `ingestEmgSamples()`
+
+```ts
+for (const raw of raws) {
+  const unadjustedUv = adcToEmgUv(raw);
+  levelSum += unadjustedUv;
+  lastUv = unadjustedUv - emgBaseline;
+  this.rawBuffer.shift();
+  this.rawBuffer.push(round3(lastUv));
+  fresh.push(round3(lastUv));
+
+  this.envelopeWindow.push(Math.max(0, lastUv));
+  if (this.envelopeWindow.length > EMG_ENVELOPE_WINDOW) this.envelopeWindow.shift();
+  envelopeUv = this.envelopeWindow.reduce((sum, v) => sum + v, 0) / this.envelopeWindow.length;
+
+  const pct = (envelopeUv / (emgMvc || 1)) * 100;
+  if (pct > windowPeakPct) windowPeakPct = pct;
+  const rep = this.emgRepDetector.push(pct, envelopeUv, EMG_SAMPLE_MS);
+  if (rep) this.broadcast('emgRep', rep satisfies EmgRepEvent);
+}
+```
+
+ดูโค้ดต้นฉบับ: [`telemetryStore.ts` บรรทัด 226–242](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/src/lib/server/telemetryStore.ts#L226-L242)
+
+ทุกค่า EMG ที่ได้รับจะผ่านขั้นตอนต่อไปนี้
+
+1. แปลงค่า ADC (0–4095) เป็นแรงดันหน่วย µV แล้วลบค่า baseline ที่ได้จากการ calibrate ออก เหลือเฉพาะสัญญาณที่เกิดจากกล้ามเนื้อ
+2. เก็บค่าลง `rawBuffer` ซึ่งเก็บค่าล่าสุดไว้ 150 ค่า โดยทิ้งค่าเก่าสุดออกหนึ่งค่าทุกครั้งที่เพิ่มค่าใหม่ และเก็บลง `fresh` ซึ่งเป็นรายการค่าใหม่ที่จะส่งให้ browser
+3. หาค่า envelope ซึ่งเป็นค่าที่บอกว่าตอนนี้กล้ามเนื้อออกแรงมากหรือน้อย สัญญาณ EMG ดิบแกว่งขึ้นลงทั้งบวกและลบอย่างรวดเร็ว ถ้านำค่าดิบมาดูตรง ๆ จะบอกระดับแรงไม่ได้ ระบบจึงเปลี่ยนค่าที่ติดลบเป็น 0 แล้วหาค่าเฉลี่ยของ 10 ค่าล่าสุด (ช่วง 100 ms) ผลที่ได้เป็นเส้นเรียบที่สูงขึ้นเมื่อกล้ามเนื้อออกแรงมาก และลดลงเมื่อผ่อนแรง ในโค้ดเก็บค่านี้ไว้ในตัวแปร `envelopeUv` และ `rms`
+4. เทียบ envelope กับค่า MVC (แรงสูงสุดของผู้ใช้จากการ calibrate) เป็นเปอร์เซ็นต์ เช่น 50% หมายถึงตอนนี้ออกแรงครึ่งหนึ่งของแรงสูงสุด
+5. ส่งเปอร์เซ็นต์เข้าตัวนับ rep ทุกค่า ไม่ใช่แค่ค่าสุดท้ายของชุด จึงไม่พลาดจังหวะที่แรงขึ้นสูงแล้วลดลงภายในชุดเดียว เมื่อนับได้ 1 rep จะส่ง event `emgRep`
+
+หลังจบลูป ระบบเก็บค่าสรุปของชุดนั้น เช่น envelope ล่าสุด (`rms`) เปอร์เซ็นต์ MVC และจำนวน rep ไว้ใน `state.emg` และ `state.emgRep` ค่าเหล่านี้ถูกใช้ตอนส่งต่อไป FastAPI ในรอบ POST ถัดไป (หัวข้อ 6.4.2.3)
+
+#### 6.4.2.3 การรับค่าเซนเซอร์อื่นจาก ESP32 ผ่าน HTTP POST
+
+ข้อมูล JSON ที่ NetworkTask ส่งมาทุก 100 ms เข้ามาที่ route `POST /api/telemetry`
+
+```ts
+export const POST: RequestHandler = async ({ request }) => {
+  try {
+    const body = await request.json() as FullTelemetryPacket;
+    serverTelemetry.ingestFullTelemetry(body);
+
+    return json({
+      success: true,
+      receivedAt: Date.now(),
+      packetCount: serverTelemetry.state.device.packetCount,
+      rateHz: serverTelemetry.state.device.rateHz,
+      ...serverTelemetry.takeBoardCommands()
+    });
+  } catch (err: any) {
+    return json({ success: false, error: err?.message || 'Invalid JSON' }, { status: 400 });
+  }
+};
+```
+
+ดูโค้ดต้นฉบับ: [`+server.ts` บรรทัด 12–27](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/src/routes/api/telemetry/+server.ts#L12-L27)
+
+1. อ่าน body เป็น JSON แล้วส่งให้ `ingestFullTelemetry()` อัปเดตค่าเซนเซอร์
+2. คำตอบที่ส่งกลับไปให้บอร์ดมีจำนวน packet ที่ได้รับและอัตราการรับข้อมูล และมีคำสั่งจาก `takeBoardCommands()` ได้แก่ `fsrZero`, `fsrMax` และ `beep` ESP32 อ่านคำสั่งเหล่านี้ใน `applyServerReply()` (หัวข้อ 6.3.2.8)
+3. ถ้า body ไม่ใช่ JSON ที่ถูกต้อง จะตอบกลับด้วยรหัส 400 บอร์ดยังส่งรอบถัดไปได้ตามปกติ
+
+`ingestFullTelemetry()` อัปเดตค่าเซนเซอร์ทีละกลุ่ม ตัวอย่างนี้คือกลุ่ม FSR และส่วนท้ายของฟังก์ชัน
+
+```ts
+ingestFullTelemetry(data: FullTelemetryPacket) {
+  const now = Date.now();
+  this.recordPacket(data.board || 'esp32');
+
+  if (data.fsr) {
+    const gripPercent =
+      data.fsr.force !== undefined
+        ? round3(
+            adcToGripPercent(
+              data.fsr.force,
+              this.state.calibration.fsrZero,
+              this.state.calibration.fsrMax
+            )
+          )
+        : this.state.fsr.gripPercent;
+    // ...
+    this.state.sensors.fsr.lastSeen = now;
+  }
+  // ...
+  if (data.buttons?.a) this.broadcast('button', { id: 'a' });
+  if (data.buttons?.b) this.broadcast('button', { id: 'b' });
+
+  this.broadcast('telemetry', this.sseSnapshot());
+  this.forwardToBackend();
+}
+```
+
+ดูโค้ดต้นฉบับ: [`telemetryStore.ts` บรรทัด 265–323](https://github.com/Fishcanwalk/muscle-activity-analyzer/blob/b1adde5/frontend/src/lib/server/telemetryStore.ts#L265-L323)
+
+1. `recordPacket()` นับจำนวน packet และคำนวณอัตราการรับต่อวินาที ใช้บอกว่าบอร์ดยังเชื่อมต่ออยู่
+2. ค่า FSR ถูกแปลงเป็นเปอร์เซ็นต์ของแรงบีบ โดยเทียบกับช่วง `fsrZero` (ไม่ได้บีบ) ถึง `fsrMax` (บีบแรงสุด) ที่ได้จากการ calibrate กลุ่ม MPU และ vitals ก็ทำแบบเดียวกัน คือถ้ามีค่าใหม่ส่งมาจะใช้ค่าใหม่ ถ้าไม่มีจะคงค่าเดิมไว้
+3. ถ้ามีการกดปุ่ม A หรือ B จะส่ง event `button` ให้หน้าเว็บเปลี่ยนสถานะการฝึก
+4. ส่งค่าเซนเซอร์ทั้งหมดยกเว้น EMG (`sseSnapshot()`) ให้ browser ผ่าน SSE แล้วเรียก `forwardToBackend()` ส่งข้อมูลต่อไป FastAPI เมื่อกำลังบันทึกอยู่ ข้อมูลที่ส่งต่อรวม `state.emg` ที่ได้จาก WebSocket (หัวข้อ 6.4.2.2) ไว้ด้วย
 
 ## 6.5 เส้นทางข้อมูลแบบครบวงจรและตัวอย่างโค้ดสำคัญ
 
