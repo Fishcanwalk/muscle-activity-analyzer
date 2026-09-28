@@ -58,11 +58,11 @@ LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 #define UNO_LINK_TX_PIN 17
 #define UNO_LINK_BAUD 9600
 
-const char* ssid     = "PSU888";
-const char* password = "chino866";
+const char* ssid     = "WIFI_NAME";
+const char* password = "WIFI_PASSWORD";
 
-const char* SERVER_HOST = "cyberpump.online";
-const uint16_t SERVER_PORT = 3000;
+const char* SERVER_HOST = "IP_ADDRESS"; // Replace with your server's IP address or hostname
+const uint16_t SERVER_PORT = "IP_PORT"; // Replace with your server's port number
 const String serverUrl = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
 const char* EMG_WS_PATH = "/ws/emg?role=device";
 MAX30105 max30102;
@@ -91,7 +91,14 @@ const unsigned long SEND_INTERVAL_MS = 100;
 const unsigned long LCD_UPDATE_INTERVAL_MS = 200;
 const unsigned long MLX_READ_INTERVAL_MS = 250;
 const unsigned long DEBUG_PRINT_INTERVAL_MS = 1000;
+ 20;
+const unsigned long EMG_WS_RECONNECT_MS = 2000;
 
+const int32_t  HTTP_CONNECT_TIMEOUT_MS = 1500;
+const uint16_t HTTP_READ_TIMEOUT_MS    = 3000;
+
+const uint8_t HTTP_MAX_CONSECUTIVE_FAILURES = 3;
+const unsigned long HTTP_BACKOFF_MS = 1000;
 const int EMG_QUEUE_LEN = 64;
 
 const unsigned long WATCHDOG_TIMEOUT_S = 8;
@@ -204,7 +211,7 @@ void connectWiFi() {
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.begin(ssid, password);
 
-  Serial.print("[WiFi] Connecting to CoEIoT");
+  Serial.print("[WiFi] Connecting to WIFI");
   int retry = 0;
   while (WiFi.status() != WL_CONNECTED && retry < 40) {
     delay(500);
@@ -213,11 +220,11 @@ void connectWiFi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WiFi] ✅ Connected to CoEIoT successfully!");
+    Serial.println("\n[WiFi] ✅ Connected to WIFI successfully!");
     Serial.print("[WiFi] ESP32 IP Address: ");
     Serial.println(WiFi.localIP());
   } else {
-    Serial.println("\n[WiFi] ❌ Failed to connect to CoEIoT. Please verify credentials.");
+    Serial.println("\n[WiFi] ❌ Failed to connect to WIFI. Please verify credentials.");
   }
 }
 
