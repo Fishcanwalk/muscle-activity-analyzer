@@ -54,7 +54,7 @@ void loop() {
       } else if (address == ADDR_MLX90614) {
         Serial.print("  <-- MLX90614 (IR Temperature) [OK]");
         found_mlx = true;
-      } else if (address == x027) {
+      } else if (address == 0x27) {
         Serial.print("LCD is OK");
         found_lcd = true;
       }

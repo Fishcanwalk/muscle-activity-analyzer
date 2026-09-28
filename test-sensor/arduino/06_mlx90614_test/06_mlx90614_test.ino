@@ -20,9 +20,12 @@ void setup() {
   Wire.begin();
 #endif
 
-  if (!mlx.begin(0x5A, &Wire)) {
-    Serial.println("❌ Error connecting to MLX90614 at address 0x5A. Check wiring!");
-    while (1) delay(100);
+  // Keeps retrying instead of halting, so wiring can be reseated while watching the
+  // Serial Monitor (and the message isn't lost if the monitor opened after boot).
+  int attempt = 0;
+  while (!mlx.begin(0x5A, &Wire)) {
+    B_PRINTF("❌ MLX90614 not found at 0x5A (attempt %d). Check wiring / power...\n", ++attempt);
+    delay(1000);
   }
   Serial.println("✅ MLX90614 Found and Initialized successfully!");
 }

@@ -58,11 +58,11 @@ LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 #define UNO_LINK_TX_PIN 17
 #define UNO_LINK_BAUD 9600
 
-const char* ssid     = "Nig";
-const char* password = "chicken123123";
+const char* ssid     = "PSU888";
+const char* password = "chino866";
 
-const char* SERVER_HOST = "172.30.81.83";
-const uint16_t SERVER_PORT = 5173;
+const char* SERVER_HOST = "cyberpump.online";
+const uint16_t SERVER_PORT = 3000;
 const String serverUrl = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
 const char* EMG_WS_PATH = "/ws/emg?role=device";
 MAX30105 max30102;
