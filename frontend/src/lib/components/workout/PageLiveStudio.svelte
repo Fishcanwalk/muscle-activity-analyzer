@@ -5,9 +5,7 @@
 	import { calibration } from '$lib/workout/calibration.svelte';
 	import EmgGraphMonitor from './EmgGraphMonitor.svelte';
 	import BiofeedbackSensors from './BiofeedbackSensors.svelte';
-	import RecordingControls from './RecordingControls.svelte';
-	import { formatDec } from '$lib/utils/format';
-	import { Camera, ArrowsLeftRight, WarningCircle, X, CaretRight } from 'phosphor-svelte';
+	import { Camera, ArrowsLeftRight, WarningCircle, X } from 'phosphor-svelte';
 
 	interface Props {
 		onGoCalibrate: () => void;
@@ -245,32 +243,4 @@
 			<EmgGraphMonitor />
 		</div>
 	</div>
-
-	<!-- Diagnostics lifters don't need mid-set, kept one click away for testing/reporting -->
-	<details class="group shrink-0 rounded-xl border border-border bg-card shadow-sm">
-		<summary class="flex cursor-pointer list-none items-center gap-2 px-4 py-2 text-sm font-semibold text-foreground">
-			<CaretRight size={14} class="transition-transform group-open:rotate-90" />
-			ข้อมูลสำหรับนักพัฒนา / การทดสอบ
-			<span class="font-normal text-muted-foreground">ความเร็ว MPU · export ข้อมูล</span>
-		</summary>
-		<div class="flex flex-col gap-4 border-t border-border p-4">
-			<div>
-				<h4 class="mb-2 text-sm font-semibold text-foreground">ความเร็วการยก (MPU-6050)</h4>
-				<dl class="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-					{#each [
-						{ k: 'ตอนนี้', v: `${formatDec(telemetry.mpu.concentricVelocity, 2)} m/s` },
-						{ k: 'สูงสุด rep ล่าสุด', v: `${formatDec(telemetry.mpu.lastRepVelocity, 2)} m/s` },
-						{ k: 'V₁ (rep แรกของเซต)', v: `${formatDec(telemetry.mpu.rep1Velocity, 2)} m/s` },
-						{ k: 'ช้าลงจาก rep แรก', v: `${telemetry.mpu.velocityLossPercent}%` }
-					] as item (item.k)}
-						<div class="rounded-lg bg-muted/60 p-2">
-							<dt class="text-xs text-muted-foreground">{item.k}</dt>
-							<dd class="font-semibold tabular-nums text-foreground">{item.v}</dd>
-						</div>
-					{/each}
-				</dl>
-			</div>
-			<RecordingControls />
-		</div>
-	</details>
 </div>

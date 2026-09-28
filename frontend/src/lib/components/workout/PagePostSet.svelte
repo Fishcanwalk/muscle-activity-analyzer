@@ -13,7 +13,9 @@
 
 	let { onStartNextSet, onFinishSession }: Props = $props();
 
-	let restSecondsLeft = $state(120);
+	// Counts up from the end of the set; 2–3 minutes is the suggested rest.
+	let restSeconds = $state(0);
+	const SUGGESTED_REST_SECONDS = 120;
 	let restTimer: any = null;
 
 	// Live MAX30102 heart-rate recovery: peak is the last set's sustained max
@@ -50,7 +52,7 @@
 
 	onMount(() => {
 		restTimer = setInterval(() => {
-			if (restSecondsLeft > 0) restSecondsLeft -= 1;
+			restSeconds += 1;
 		}, 1000);
 	});
 
@@ -181,21 +183,21 @@
 			</button>
 		</div>
 	{:else if currentSummary}
-	<!-- Rest Countdown Banner -->
+	<!-- Rest timer banner -->
 	<div
 		class="flex flex-wrap items-center justify-between gap-6 rounded-xl border border-cyan-500/30 bg-linear-to-r from-cyan-500/10 via-card to-emerald-500/5 p-6 shadow-xl"
 	>
 		<div>
 			<span class="flex items-center gap-2 text-sm font-semibold text-cyan-700">
-				<Timer class="h-4 w-4" /> เวลาพักก่อนเซตถัดไป
+				<Timer class="h-4 w-4" /> เวลาพัก
 			</span>
-			<div class="text-4xl font-black text-foreground">
-				{String(Math.floor(restSecondsLeft / 60)).padStart(2, '0')}:{String(
-					restSecondsLeft % 60
-				).padStart(2, '0')}
+			<div class="text-4xl font-black tabular-nums text-foreground">
+				{String(Math.floor(restSeconds / 60)).padStart(2, '0')}:{String(restSeconds % 60).padStart(2, '0')}
 			</div>
-			<p class="mt-1 text-sm text-muted-foreground">
-				พัก 2–3 นาทีให้กล้ามเนื้อฟื้นแรงก่อนเริ่มเซตถัดไป
+			<p class={['mt-1 text-sm', restSeconds >= SUGGESTED_REST_SECONDS ? 'font-medium text-emerald-700' : 'text-muted-foreground']}>
+				{restSeconds >= SUGGESTED_REST_SECONDS
+					? 'พักครบ 2 นาทีแล้ว พร้อมเริ่มเซตถัดไป (แนะนำ 2–3 นาที)'
+					: 'พัก 2–3 นาทีให้กล้ามเนื้อฟื้นแรงก่อนเริ่มเซตถัดไป'}
 			</p>
 		</div>
 
