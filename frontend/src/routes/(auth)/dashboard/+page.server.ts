@@ -117,20 +117,22 @@ function buildDashboardProfile(user: ApiUser, setsDescRaw: SetResult[]): UserPro
 		emgPercent: s.peakEmgPercent
 	}));
 
-	const historyLogs = [...sessions]
-		.reverse()
-		.slice(0, 30)
-		.map((s) => ({
-			id: s.id,
-			date: thaiDate(s.startedAt),
-			exercise: s.exercises.join(', '),
-			weightKg: s.maxWeightKg,
-			sets: s.sets.length,
-			totalReps: s.totalReps,
-			cleanReps: s.cleanReps,
-			purity: s.purityPercent,
-			notes: ''
-		}));
+	// Every session (the page filters and paginates them), newest first.
+	const historyLogs = [...sessions].reverse().map((s) => ({
+		id: s.id,
+		startedAt: s.startedAt,
+		date: thaiDate(s.startedAt),
+		exercise: s.exercises.join(', '),
+		exercises: s.exercises,
+		weightKg: s.maxWeightKg,
+		sets: s.sets.length,
+		totalReps: s.totalReps,
+		cleanReps: s.cleanReps,
+		purity: s.purityPercent,
+		cleanVolumeKg: Math.round(s.cleanVolumeKg * 10) / 10,
+		peakEmgPercent: s.peakEmgPercent,
+		notes: ''
+	}));
 
 	const latestSet = setsDesc[0];
 

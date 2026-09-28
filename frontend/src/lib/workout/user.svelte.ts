@@ -36,13 +36,19 @@ export interface UserProfile {
 	/** One entry per workout session (sets grouped by session_id), newest first. */
 	historyLogs: {
 		id: string;
+		/** ISO start time, for the dashboard's date filter and progress chart. */
+		startedAt: string;
 		date: string;
 		exercise: string;
+		exercises: string[];
 		weightKg: number;
 		sets: number;
 		totalReps: number;
 		cleanReps: number;
 		purity: number;
+		cleanVolumeKg: number;
+		/** % of that session's calibrated MVC. */
+		peakEmgPercent: number;
 		notes: string;
 	}[];
 }

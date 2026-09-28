@@ -16,12 +16,113 @@
 		Target,
 		Pulse,
 		Crown,
-		CaretRight
+		CaretRight,
+		CaretLeft
 	} from 'phosphor-svelte';
+	import Chart from 'chart.js/auto';
+	import { thaiShortDate } from '$lib/workout/metrics';
 
 	let { data }: PageProps = $props();
 
 	let currentUser = $derived(data.user);
+
+	// History + progress chart share one set of filters; the list is paginated on the
+	// client (the server sends every session, at most 200 sets' worth).
+	const PAGE_SIZE = 8;
+	const DAY_MS = 86_400_000;
+	const RANGES = [
+		{ value: '7', label: '7 วันล่าสุด', days: 7 },
+		{ value: '30', label: '30 วันล่าสุด', days: 30 },
+		{ value: '90', label: '90 วันล่าสุด', days: 90 },
+		{ value: 'all', label: 'ทั้งหมด', days: null }
+	] as const;
+	// One series per chart (no second y-axis): the lifter picks which measure to follow.
+	const METRICS = [
+		{ key: 'cleanVolumeKg', label: 'Clean Volume', unit: 'kg', type: 'bar', title: 'ปริมาณงานคลีน (น้ำหนัก × ครั้งที่คลีน)' },
+		{ key: 'cleanReps', label: 'ครั้งคลีน', unit: 'ครั้ง', type: 'bar', title: 'จำนวนครั้งที่ทำได้ถูกต้อง' },
+		{ key: 'purity', label: 'ท่าคลีน', unit: '%', type: 'line', title: 'ร้อยละท่าคลีน (Form Purity)' },
+		{ key: 'peakEmgPercent', label: 'แรงกล้ามเนื้อ', unit: '% MVC', type: 'line', title: 'แรงกล้ามเนื้อสูงสุด (% MVC)' }
+	] as const;
+	type RangeValue = (typeof RANGES)[number]['value'];
+	type MetricKey = (typeof METRICS)[number]['key'];
+
+	let exerciseFilter = $state('all');
+	let rangeFilter = $state<RangeValue>('all');
+	let metricKey = $state<MetricKey>('cleanVolumeKg');
+	let page = $state(1);
+
+	let historyExercises = $derived(
+		[...new Set(currentUser.historyLogs.flatMap((log) => log.exercises))].sort()
+	);
+	let filteredLogs = $derived.by(() => {
+		const days = RANGES.find((r) => r.value === rangeFilter)?.days ?? null;
+		const cutoff = days === null ? 0 : Date.now() - days * DAY_MS;
+		return currentUser.historyLogs.filter(
+			(log) =>
+				(exerciseFilter === 'all' || log.exercises.includes(exerciseFilter)) &&
+				new Date(log.startedAt).getTime() >= cutoff
+		);
+	});
+	let pageCount = $derived(Math.max(1, Math.ceil(filteredLogs.length / PAGE_SIZE)));
+	let currentPage = $derived(Math.min(page, pageCount));
+	let pageLogs = $derived(
+		filteredLogs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+	);
+	let metric = $derived(METRICS.find((m) => m.key === metricKey) ?? METRICS[0]);
+
+	// Chart.js is an imperative widget: the attachment re-runs (destroying the old chart)
+	// whenever the filters or the chosen metric change.
+	function progressChart(canvas: HTMLCanvasElement) {
+		const points = [...filteredLogs].reverse(); // oldest first, left to right
+		const m = metric;
+		const ink = '#52525b';
+		const chart = new Chart(canvas, {
+			type: m.type,
+			data: {
+				labels: points.map((p) => thaiShortDate(p.startedAt)),
+				datasets: [
+					{
+						label: `${m.label} (${m.unit})`,
+						data: points.map((p) => p[m.key]),
+						backgroundColor: m.type === 'bar' ? 'rgba(16, 185, 129, 0.75)' : '#10b981',
+						borderColor: '#10b981',
+						borderWidth: 2,
+						borderRadius: 4,
+						pointRadius: 4,
+						pointHoverRadius: 6,
+						tension: 0
+					}
+				]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				interaction: { mode: 'index', intersect: false },
+				plugins: {
+					legend: { display: false },
+					tooltip: {
+						callbacks: {
+							title: (items) => {
+								const p = points[items[0].dataIndex];
+								return `${p.date} · ${p.exercise}`;
+							},
+							label: (item) => `${m.label}: ${item.formattedValue} ${m.unit}`
+						}
+					}
+				},
+				scales: {
+					x: { ticks: { color: ink }, grid: { display: false } },
+					y: {
+						beginAtZero: true,
+						max: m.key === 'purity' ? 100 : undefined,
+						ticks: { color: ink },
+						grid: { color: 'rgba(0,0,0,0.06)' }
+					}
+				}
+			}
+		});
+		return () => chart.destroy();
+	}
 </script>
 
 <svelte:head>
@@ -265,23 +366,80 @@
 			</div>
 		</div>
 
-		<!-- History Logs Table -->
-		<div class="rounded-xl border border-border bg-card p-4 space-y-3">
-			<div class="flex items-center justify-between">
+		<!-- History + progress: one card, one filter row for both the chart and the list -->
+		<div class="rounded-xl border border-border bg-card p-4 space-y-4">
+			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div class="flex items-center gap-2">
 					<CalendarBlank size={16} class="text-muted-foreground" />
-					<span class="text-base font-semibold text-foreground">ประวัติการฝึก</span>
+					<span class="text-base font-semibold text-foreground">ประวัติการฝึกและพัฒนาการ</span>
 				</div>
-				<span class="text-xs tabular-nums text-muted-foreground">{currentUser.historyLogs.length} เซสชัน</span>
+				<div class="flex flex-wrap items-center gap-2 text-sm">
+					<select
+						bind:value={exerciseFilter}
+						onchange={() => (page = 1)}
+						aria-label="กรองตามท่า"
+						class="h-9 rounded-lg border border-input bg-background px-2.5"
+					>
+						<option value="all">ทุกท่า</option>
+						{#each historyExercises as ex (ex)}
+							<option value={ex}>{ex}</option>
+						{/each}
+					</select>
+					<select
+						bind:value={rangeFilter}
+						onchange={() => (page = 1)}
+						aria-label="ช่วงเวลา"
+						class="h-9 rounded-lg border border-input bg-background px-2.5"
+					>
+						{#each RANGES as r (r.value)}
+							<option value={r.value}>{r.label}</option>
+						{/each}
+					</select>
+				</div>
 			</div>
 
 			{#if currentUser.historyLogs.length === 0}
 				<div class="text-center py-6 text-xs text-muted-foreground">
 					ยังไม่มีประวัติการฝึก กด "เริ่มออกกำลังกาย" ด้านบนเพื่อเริ่มเซตแรก
 				</div>
+			{:else if filteredLogs.length === 0}
+				<div class="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
+					ไม่มี session ที่ตรงกับตัวกรองนี้ ลองเลือกท่าหรือช่วงเวลาอื่น
+				</div>
 			{:else}
+				<!-- Progress chart -->
+				<div class="space-y-3 rounded-lg border border-border bg-background/60 p-3">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<div class="flex items-center gap-2">
+							<Pulse size={15} class="text-muted-foreground" />
+							<span class="text-sm font-semibold text-foreground">{metric.title}</span>
+						</div>
+						<div class="flex rounded-lg border border-border bg-muted/60 p-0.5" role="group" aria-label="เลือกตัวชี้วัด">
+							{#each METRICS as m (m.key)}
+								<button
+									type="button"
+									onclick={() => (metricKey = m.key)}
+									aria-pressed={metricKey === m.key}
+									class={[
+										'rounded-md px-2.5 py-1 text-xs transition',
+										metricKey === m.key
+											? 'bg-background font-semibold text-foreground shadow-sm'
+											: 'text-muted-foreground hover:text-foreground'
+									]}
+								>
+									{m.label}
+								</button>
+							{/each}
+						</div>
+					</div>
+					<div class="relative h-56 w-full">
+						<canvas {@attach progressChart} aria-label="{metric.title} ของ {filteredLogs.length} session"></canvas>
+					</div>
+				</div>
+
+				<!-- Session list -->
 				<div class="space-y-2">
-					{#each currentUser.historyLogs as log (log.id)}
+					{#each pageLogs as log (log.id)}
 						<a
 							href={resolve('/(auth)/sessions/[id]', { id: log.id })}
 							class="group block p-3 rounded-lg bg-muted/50 border border-border hover:border-foreground/30 hover:bg-muted transition"
@@ -308,6 +466,35 @@
 							{/if}
 						</a>
 					{/each}
+				</div>
+
+				<!-- Pagination -->
+				<div class="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums text-muted-foreground">
+					<span>
+						แสดง {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredLogs.length)}
+						จาก {filteredLogs.length} session
+					</span>
+					{#if pageCount > 1}
+						<div class="flex items-center gap-1">
+							<button
+								type="button"
+								onclick={() => (page = currentPage - 1)}
+								disabled={currentPage === 1}
+								class="flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-foreground hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent"
+							>
+								<CaretLeft size={12} /> ก่อนหน้า
+							</button>
+							<span class="px-2">หน้า {currentPage} / {pageCount}</span>
+							<button
+								type="button"
+								onclick={() => (page = currentPage + 1)}
+								disabled={currentPage === pageCount}
+								class="flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-foreground hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent"
+							>
+								ถัดไป <CaretRight size={12} />
+							</button>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
