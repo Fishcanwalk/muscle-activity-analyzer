@@ -122,6 +122,15 @@ export function thaiShortDate(iso: string): string {
 	});
 }
 
+/** Time of day in Thai time, e.g. "14:05". */
+export function thaiTime(iso: string): string {
+	return new Date(iso).toLocaleTimeString('th-TH', {
+		hour: '2-digit',
+		minute: '2-digit',
+		timeZone: APP_TIME_ZONE
+	});
+}
+
 /** The calendar day in Thai time, as YYYY-MM-DD. */
 export function thaiDayKey(iso: string): string {
 	return new Date(iso).toLocaleDateString('en-CA', { timeZone: APP_TIME_ZONE });

@@ -15,7 +15,8 @@
 		SignOut,
 		Target,
 		Pulse,
-		Crown
+		Crown,
+		CaretRight
 	} from 'phosphor-svelte';
 
 	let { data }: PageProps = $props();
@@ -281,7 +282,10 @@
 			{:else}
 				<div class="space-y-2">
 					{#each currentUser.historyLogs as log (log.id)}
-						<div class="p-3 rounded-lg bg-muted/50 border border-border hover:border-border transition">
+						<a
+							href={resolve('/(auth)/sessions/[id]', { id: log.id })}
+							class="group block p-3 rounded-lg bg-muted/50 border border-border hover:border-foreground/30 hover:bg-muted transition"
+						>
 							<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
 								<div class="flex items-center gap-2.5">
 									<span class="font-medium text-foreground">{log.exercise}</span>
@@ -292,6 +296,9 @@
 								<div class="flex items-center gap-3 tabular-nums text-xs">
 									<span class="text-foreground/80">{log.sets} เซต · {log.totalReps} ครั้ง</span>
 									<span class="text-emerald-600 font-semibold">คลีน {log.purity}%</span>
+									<span class="flex items-center gap-0.5 text-muted-foreground group-hover:text-foreground">
+										ดูรายละเอียด <CaretRight size={12} />
+									</span>
 								</div>
 							</div>
 							{#if log.notes}
@@ -299,7 +306,7 @@
 									{log.notes}
 								</div>
 							{/if}
-						</div>
+						</a>
 					{/each}
 				</div>
 			{/if}
