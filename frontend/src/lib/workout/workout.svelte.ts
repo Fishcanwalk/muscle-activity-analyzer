@@ -215,6 +215,9 @@ class WorkoutManager {
 		this.fsmState = 'IDLE';
 
 		this.postRecordingAction('stop');
+		if (completedSet.totalReps === 0) {
+			toast.info('เซตนี้ไม่มีครั้งที่นับได้ จึงไม่บันทึกลงประวัติ');
+		}
 		// Persist right away so the set survives even if the lifter never presses
 		// "เริ่มเซตถัดไป"/"จบการออกกำลังกาย" (e.g. just switches tabs or closes the page).
 		void this.saveSummary(completedSet, { silent: true });
@@ -225,7 +228,8 @@ class WorkoutManager {
 	// sessionStorage, setsInSession, lastCompletedSet, set counter) so the next
 	// startSet() begins a fresh workout.
 	endWorkout(): SessionSummary {
-		const sets = this.setsInSession;
+		// Sets without a counted rep were never saved, so they aren't part of the session.
+		const sets = this.setsInSession.filter((s) => s.totalReps > 0);
 		const sessionId = this.sessionId;
 
 		const summary: SessionSummary = {
@@ -266,13 +270,19 @@ class WorkoutManager {
 			return;
 		}
 		this.isFinishing = true;
-		this.activeTab = 'postset';
 		await this.saveAllPendingSets();
 		const summary = this.endWorkout();
 		this.isFinishing = false;
-		this.sessionSummary = summary;
 		// The next session has to calibrate again from scratch.
 		for (const listener of this.workoutEndedListeners) listener();
+		if (summary.totalSets === 0) {
+			// Nothing was saved, so there is no session to summarize or compare.
+			toast.warning('ไม่มีเซตที่นับครั้งได้ จึงไม่บันทึก session นี้');
+			this.activeTab = 'calibration';
+			return;
+		}
+		this.activeTab = 'postset';
+		this.sessionSummary = summary;
 		if (summary.sessionId) void this.loadComparison(summary.sessionId);
 	}
 
@@ -347,8 +357,14 @@ class WorkoutManager {
 	// Called automatically by stopSet(), and again by PagePostSet.svelte's buttons,
 	// saveAllPendingSets and handleRemoteButton. Idempotent: a set already in
 	// savedSetIds (or currently being saved) is not re-POSTed.
+	// A set without a counted rep is never sent (the backend refuses it too); it counts
+	// as handled so nothing retries it.
 	async saveSummary(summary: SetSummary, opts: { silent?: boolean } = {}): Promise<{ success: boolean }> {
 		if (this.savedSetIds.has(summary.localId)) return { success: true };
+		if (summary.totalReps === 0) {
+			this.savedSetIds.add(summary.localId);
+			return { success: true };
+		}
 		const pending = this.pendingSaves.get(summary.localId);
 		if (pending) return pending;
 		const save = this.postSummary(summary, opts);

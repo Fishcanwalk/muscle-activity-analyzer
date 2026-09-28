@@ -20,6 +20,14 @@ async def create_session_result(
     body: SessionResultCreate,
     current_user: dict = Depends(get_current_user),
 ) -> SessionResult:
+    # A set with no counted rep (button pressed twice, sensor not on) has nothing to show
+    # and only clutters history/analytics. Checked here rather than as Field(ge=1) on the
+    # model: SessionResult inherits it, and older zero-rep documents must still load.
+    if body.totalReps < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Set has no reps; nothing to save",
+        )
     db = get_database()
     doc = body.model_dump()
     doc["user_id"] = str(current_user["_id"])
